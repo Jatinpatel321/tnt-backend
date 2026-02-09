@@ -1,0 +1,10 @@
+- [ ] Add import for notify_user in app/modules/stationery/router.py
+- [ ] Add vendor notification in submit_job after db.commit()
+- [ ] Add student notification in update_job_status when status == JobStatus.READY after db.commit()
+- [ ] Add import for notify_user and User in app/modules/stationery/payment_router.py
+- [ ] Add student notification in verify_job_payment after job.is_paid = True, db.commit()
+- [ ] Add import for notify_user and User in app/modules/payments/service.py
+- [ ] Add user notification in refund_payment after db.commit()
+- [ ] Create app/modules/notifications/router.py (already done)
+- [ ] Add imports for stationery and notifications routers in app/main.py
+- [ ] Register stationery_router, stationery_payment_router, and notification_router in app/main.py
