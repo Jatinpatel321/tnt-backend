@@ -205,3 +205,56 @@ def vendor_order_details(
         raise HTTPException(status_code=403, detail="Vendor not approved")
 
     return get_vendor_order_details(order_id, vendor.id, db)
+
+
+# 📱 QR PICKUP ENDPOINTS
+
+@router.post("/{order_id}/qr", response_model=dict)
+def generate_qr_endpoint(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user)
+):
+    """Generate QR code for order pickup."""
+    try:
+        qr_code = generate_qr_code(order_id, db)
+        return {"qr_code": qr_code}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/qr/confirm", response_model=dict)
+def confirm_pickup_endpoint(
+    qr_code: str,
+    db: Session = Depends(get_db),
+    user=Depends(require_role("vendor"))
+):
+    """Confirm pickup using QR code."""
+    vendor = db.query(User).filter(User.phone == user["phone"]).first()
+    success = confirm_pickup(qr_code, vendor.id, db)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid QR code or pickup not allowed")
+    return {"message": "Pickup confirmed successfully"}
+
+
+@router.get("/qr/{qr_code}", response_model=dict)
+def get_order_by_qr_endpoint(
+    qr_code: str,
+    db: Session = Depends(get_db),
+    user=Depends(require_role("vendor"))
+):
+    """Get order details by QR code for vendor verification."""
+    vendor = db.query(User).filter(User.phone == user["phone"]).first()
+    order = get_order_by_qr(qr_code, db)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.vendor_id != vendor.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return {
+        "order_id": order.id,
+        "user_id": order.user_id,
+        "status": order.status.value,
+        "created_at": order.created_at.isoformat()
+    }

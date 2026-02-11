@@ -12,6 +12,8 @@ import app.modules.ledger.model  # noqa
 import app.modules.stationery.service_model
 import app.modules.stationery.job_model
 import app.modules.notifications.model
+import app.modules.group_cart.model  # noqa
+import app.modules.rewards.model  # noqa
 
 
 def init_db():

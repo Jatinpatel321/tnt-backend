@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from app.modules.orders.model import Order, OrderStatus
 from app.modules.slots.model import Slot
 from app.modules.orders.history_model import OrderHistory
+from app.modules.rewards.service import process_order_completion_rewards
 
 
 def create_order(user_id: int, slot_id: int, db: Session):

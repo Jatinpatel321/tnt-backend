@@ -49,3 +49,15 @@ def require_role(required_role: str):
             raise HTTPException(status_code=403, detail="Access denied")
         return user
     return role_checker
+
+
+def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Get current user ID from JWT token"""
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")

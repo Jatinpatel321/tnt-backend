@@ -70,15 +70,25 @@ def verify_job_payment(
     job.is_paid = True
     db.commit()
 
+    student = db.query(User).filter(User.id == job.user_id).first()
+
+    notify_user(
+        user_id=student.id,
+        phone=student.phone,
+        title="Payment Successful",
+        message="Your stationery job payment has been processed successfully.",
+        db=db
+    )
+
+    # Add ledger entry for the payment
+    add_ledger_entry(
+        order_id=None,
+        payment_id=razorpay_payment_id,
+        amount=job.amount,
+        entry_type=LedgerType.CREDIT,
+        source=LedgerSource.PAYMENT,
+        description="Stationery job payment",
+        db=db
+    )
+
     return {"message": "Stationery payment successful"}
-
-
-add_ledger_entry(
-    order_id=None,
-    payment_id=None,
-    amount=job.amount,
-    entry_type=LedgerType.CREDIT,
-    source=LedgerSource.PAYMENT,
-    description="Stationery job payment",
-    db=db
-)

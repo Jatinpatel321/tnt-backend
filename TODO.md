@@ -1,10 +1,11 @@
-- [ ] Add import for notify_user in app/modules/stationery/router.py
-- [ ] Add vendor notification in submit_job after db.commit()
-- [ ] Add student notification in update_job_status when status == JobStatus.READY after db.commit()
-- [ ] Add import for notify_user and User in app/modules/stationery/payment_router.py
-- [ ] Add student notification in verify_job_payment after job.is_paid = True, db.commit()
-- [ ] Add import for notify_user and User in app/modules/payments/service.py
-- [ ] Add user notification in refund_payment after db.commit()
-- [ ] Create app/modules/notifications/router.py (already done)
-- [ ] Add imports for stationery and notifications routers in app/main.py
-- [ ] Register stationery_router, stationery_payment_router, and notification_router in app/main.py
+- [x] Add import for notify_user in app/modules/stationery/router.py
+- [x] Add vendor notification in submit_job after db.commit()
+- [x] Add student notification in update_job_status when status == JobStatus.READY after db.commit()
+- [x] Add import for notify_user and User in app/modules/stationery/payment_router.py
+- [x] Add student notification in verify_job_payment after job.is_paid = True, db.commit()
+- [x] Add import for notify_user and User in app/modules/payments/service.py
+- [x] Add user notification in refund_payment after db.commit()
+- [x] Create app/modules/notifications/router.py (already done)
+- [x] Add imports for stationery and notifications routers in app/main.py
+- [x] Register stationery_router, stationery_payment_router, and notification_router in app/main.py
+- [x] Add group_cart_router import and registration in app/main.py
