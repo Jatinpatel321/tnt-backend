@@ -9,3 +9,6 @@
 - [x] Add imports for stationery and notifications routers in app/main.py
 - [x] Register stationery_router, stationery_payment_router, and notification_router in app/main.py
 - [x] Add group_cart_router import and registration in app/main.py
+- [x] Implement AI Intelligence Module with demand planning, slot recommendations, predictive ETA, vendor ranking, personalization, reorder suggestions, and proactive alerts
+- [x] Add SUPER_ADMIN role to UserRole enum in model and schemas
+- [x] Update /verify-otp response format to include success/message/data wrapper and full user object

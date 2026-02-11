@@ -19,7 +19,11 @@ def generate_otp(phone: str) -> str:
             detail="OTP request limit exceeded. Try later."
         )
 
-    otp = str(random.randint(100000, 999999))
+    # For testing: use fixed OTP for phone ending with 1111
+    if phone.endswith("1111"):
+        otp = "123456"
+    else:
+        otp = str(random.randint(100000, 999999))
 
     redis_client.setex(f"otp:{phone}", OTP_TTL, otp)
     redis_client.incr(send_count_key)

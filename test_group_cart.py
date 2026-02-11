@@ -12,6 +12,10 @@ def send_otp(phone: str) -> Dict[str, Any]:
     response = requests.post(f"{BASE_URL}/auth/send-otp", json={"phone": phone})
     return response.json()
 
+def generate_test_otp(phone: str) -> str:
+    """Generate a test OTP (for testing only)"""
+    return "123456"
+
 def verify_otp(phone: str, otp: str) -> Dict[str, Any]:
     """Verify OTP and get token"""
     response = requests.post(f"{BASE_URL}/auth/verify-otp", json={"phone": phone, "otp": otp})

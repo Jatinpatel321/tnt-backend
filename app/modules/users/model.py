@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Enum, Boolean
+from sqlalchemy import Column, Integer, String, Enum, Boolean, JSON
 from app.database.base import Base
 import enum
 
@@ -7,6 +7,7 @@ class UserRole(enum.Enum):
     FACULTY = "faculty"
     VENDOR = "vendor"
     ADMIN = "admin"
+    SUPER_ADMIN = "super_admin"
 
 class User(Base):
     __tablename__ = "users"
@@ -20,3 +21,4 @@ class User(Base):
     # inside User model
     is_active = Column(Boolean, default=True)
     is_approved = Column(Boolean, default=False)  # 🔥 for vendors
+    preferences = Column(JSON, default=dict)  # 🔥 for user preferences

@@ -15,6 +15,7 @@ from app.modules.notifications.router import router as notification_router
 from app.modules.rewards.router import router as rewards_router
 from app.modules.group_cart.router import router as group_cart_router
 from app.modules.signals.router import router as signals_router
+from app.modules.ai_intelligence.router import router as ai_router
 
 
 app = FastAPI(title="TNT – Tap N Take")

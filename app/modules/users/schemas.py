@@ -8,6 +8,7 @@ class UserRole(str, Enum):
     faculty = "faculty"
     vendor = "vendor"
     admin = "admin"
+    super_admin = "super_admin"
 
 
 class UserCreate(BaseModel):

@@ -63,8 +63,20 @@ def verify_otp_login(
     )
 
     return {
-        "access_token": token,
-        "token_type": "bearer",
-        "is_new_user": user.name is None,
-        "role": user.role.value
+        "success": True,
+        "message": "Login successful",
+        "data": {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "phone": user.phone,
+                "name": user.name,
+                "role": user.role.value,
+                "university_id": user.university_id,
+                "is_active": user.is_active,
+                "is_approved": user.is_approved
+            },
+            "is_new_user": user.name is None
+        }
     }

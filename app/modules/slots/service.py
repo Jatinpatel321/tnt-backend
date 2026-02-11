@@ -10,7 +10,7 @@ LOCK_TTL = 5  # seconds
 def book_slot(slot_id: int, db: Session):
     lock_key = f"slot_lock:{slot_id}"
 
-    # 🔒 Try acquiring lock
+    # 🔒 Try acquiring distributed lock
     lock_acquired = redis_client.set(
         lock_key,
         "locked",
@@ -25,7 +25,8 @@ def book_slot(slot_id: int, db: Session):
         )
 
     try:
-        slot = db.query(Slot).filter(Slot.id == slot_id).first()
+        # 🔒 SELECT FOR UPDATE for race condition prevention
+        slot = db.query(Slot).filter(Slot.id == slot_id).with_for_update().first()
 
         if not slot:
             raise HTTPException(status_code=404, detail="Slot not found")
@@ -35,8 +36,9 @@ def book_slot(slot_id: int, db: Session):
             db.commit()
             raise HTTPException(status_code=400, detail="Slot full")
 
-        # ✅ Safe increment
+        # ✅ Safe increment with congestion metrics
         slot.current_orders += 1
+        slot.congestion_level = (slot.current_orders / slot.max_orders) * 100
 
         if slot.current_orders >= slot.max_orders:
             slot.status = SlotStatus.FULL

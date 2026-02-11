@@ -24,12 +24,36 @@ router = APIRouter(prefix="/orders", tags=["Orders"])
 def place_order(
     slot_id: int,
     items: list[OrderItemCreate],
+    idempotency_key: str | None = None,
     db: Session = Depends(get_db),
     user=Depends(get_current_user)
 ):
+    from app.core.redis import redis_client
+
     db_user = db.query(User).filter(User.phone == user["phone"]).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # 🔑 Idempotency check
+    if idempotency_key:
+        key = f"idempotency:order:{user['phone']}:{idempotency_key}"
+        if redis_client.exists(key):
+            raise HTTPException(status_code=409, detail="Duplicate request")
+        redis_client.setex(key, 3600, "1")  # 1 hour TTL
+
+    # 🛒 Cart validation - ensure all items from same vendor
+    if items:
+        vendor_ids = set()
+        for item in items:
+            menu_item = db.query(MenuItem).filter(MenuItem.id == item.menu_item_id).first()
+            if not menu_item:
+                raise HTTPException(status_code=400, detail=f"Menu item {item.menu_item_id} not found")
+            if not menu_item.is_available:
+                raise HTTPException(status_code=400, detail=f"Menu item {item.menu_item_id} not available")
+            vendor_ids.add(menu_item.vendor_id)
+
+        if len(vendor_ids) > 1:
+            raise HTTPException(status_code=400, detail="Cannot order from multiple vendors")
 
     order = create_order(
         user_id=db_user.id,
@@ -38,6 +62,14 @@ def place_order(
     )
 
     total_amount = add_items_to_order(order, items, db)
+
+    # ⏱️ Calculate ETA (15-30 minutes based on slot congestion)
+    slot = db.query(Slot).filter(Slot.id == slot_id).first()
+    congestion_factor = slot.congestion_level if hasattr(slot, 'congestion_level') else 0
+    base_eta = 15  # minutes
+    eta_minutes = base_eta + int(congestion_factor / 10)  # Add up to 10 minutes for congestion
+    order.eta_minutes = eta_minutes
+
     db.commit()
 
     # 🔔 Notify student
@@ -45,14 +77,15 @@ def place_order(
         user_id=db_user.id,
         phone=db_user.phone,
         title="Order Placed",
-        message=f"Your order #{order.id} has been placed successfully.",
+        message=f"Your order #{order.id} has been placed successfully. ETA: {eta_minutes} minutes.",
         db=db
     )
 
     return {
         "order_id": order.id,
         "status": order.status,
-        "total_amount": total_amount
+        "total_amount": total_amount,
+        "eta_minutes": eta_minutes
     }
 
 
