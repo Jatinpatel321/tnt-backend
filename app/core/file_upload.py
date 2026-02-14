@@ -1,6 +1,7 @@
 import os
 import uuid
-from fastapi import UploadFile, HTTPException
+
+from fastapi import HTTPException, UploadFile
 
 UPLOAD_DIR = "uploads/menu"
 

@@ -1,6 +1,8 @@
-from sqlalchemy import Column, Integer, DateTime, Enum, ForeignKey
-from app.database.base import Base
 import enum
+
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer
+
+from app.database.base import Base
 
 
 class SlotStatus(enum.Enum):

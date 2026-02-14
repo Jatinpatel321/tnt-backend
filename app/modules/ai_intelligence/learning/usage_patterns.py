@@ -1,8 +1,13 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import func, extract
 from datetime import datetime, timedelta
-from typing import Dict, List, Any
+from typing import Any, Dict, List
+
+from sqlalchemy import extract, func
+from sqlalchemy.orm import Session
+
+from app.core.time_utils import utcnow_naive
+from app.modules.menu.model import MenuItem
 from app.modules.orders.model import Order
+from app.modules.users.model import User
 
 
 class UsagePatterns:
@@ -14,7 +19,7 @@ class UsagePatterns:
     def analyze_user_patterns(self, user_id: int) -> Dict[str, Any]:
         """Analyze comprehensive usage patterns for a user"""
 
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        thirty_days_ago = utcnow_naive() - timedelta(days=30)
 
         patterns = {
             "ordering_frequency": self._calculate_ordering_frequency(user_id, thirty_days_ago),
@@ -29,7 +34,7 @@ class UsagePatterns:
     def analyze_system_patterns(self) -> Dict[str, Any]:
         """Analyze system-wide usage patterns"""
 
-        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        seven_days_ago = utcnow_naive() - timedelta(days=7)
 
         patterns = {
             "peak_hours": self._analyze_system_peak_hours(seven_days_ago),
@@ -48,7 +53,7 @@ class UsagePatterns:
             Order.created_at >= since
         ).count()
 
-        days_since = (datetime.utcnow() - since).days
+        days_since = (utcnow_naive() - since).days
         orders_per_day = total_orders / max(days_since, 1)
 
         # Classify frequency
@@ -111,27 +116,69 @@ class UsagePatterns:
     def _analyze_spending_patterns(self, user_id: int, since: datetime) -> Dict[str, Any]:
         """Analyze user's spending patterns"""
 
-        # This would require amount fields in orders
-        # For now, return mock analysis
+        aggregates = self.db.query(
+            func.avg(Order.total_amount).label("avg_order_value"),
+            func.sum(Order.total_amount).label("total_spent"),
+            func.count(Order.id).label("order_count"),
+        ).filter(
+            Order.user_id == user_id,
+            Order.created_at >= since,
+            Order.status != "cancelled",
+        ).first()
+
+        avg_order_value = float(aggregates.avg_order_value or 0)
+        total_spent = float(aggregates.total_spent or 0)
+        order_count = int(aggregates.order_count or 0)
+
+        if avg_order_value >= 250:
+            spending_category = "high"
+        elif avg_order_value >= 120:
+            spending_category = "medium"
+        else:
+            spending_category = "low"
+
+        budget_conscious = order_count > 0 and avg_order_value <= 130
+
         return {
-            "avg_order_value": 150.0,
-            "total_spent": 2250.0,
-            "spending_category": "medium",
-            "budget_conscious": False
+            "avg_order_value": round(avg_order_value, 2),
+            "total_spent": round(total_spent, 2),
+            "spending_category": spending_category,
+            "budget_conscious": budget_conscious,
         }
 
     def _analyze_category_preferences(self, user_id: int, since: datetime) -> Dict[str, Any]:
         """Analyze user's category preferences"""
 
-        # This would analyze food vs stationery preferences
-        # For now, return mock analysis
+        rows = self.db.query(
+            User.vendor_type,
+            func.count(Order.id).label("order_count"),
+        ).join(
+            Order, Order.vendor_id == User.id,
+        ).filter(
+            Order.user_id == user_id,
+            Order.created_at >= since,
+            Order.status != "cancelled",
+        ).group_by(User.vendor_type).all()
+
+        total_orders = sum(int(row.order_count or 0) for row in rows)
+        if total_orders == 0:
+            return {
+                "preferred_category": "unknown",
+                "category_distribution": {},
+                "diversity_score": 0.0,
+            }
+
+        distribution = {
+            (row.vendor_type or "unknown"): round((int(row.order_count) / total_orders), 2)
+            for row in rows
+        }
+        preferred_category = max(distribution.items(), key=lambda entry: entry[1])[0]
+        diversity_score = round(min(1.0, len(distribution) / 3), 2)
+
         return {
-            "preferred_category": "food",
-            "category_distribution": {
-                "food": 0.7,
-                "stationery": 0.3
-            },
-            "diversity_score": 0.6
+            "preferred_category": preferred_category,
+            "category_distribution": distribution,
+            "diversity_score": diversity_score,
         }
 
     def _analyze_loyalty_patterns(self, user_id: int, since: datetime) -> Dict[str, Any]:
@@ -177,23 +224,93 @@ class UsagePatterns:
     def _analyze_popular_categories(self, since: datetime) -> Dict[str, Any]:
         """Analyze popular categories system-wide"""
 
-        # Mock analysis - would need category classification
+        rows = self.db.query(
+            User.vendor_type,
+            func.count(Order.id).label("order_count"),
+        ).join(
+            Order, Order.vendor_id == User.id,
+        ).filter(
+            Order.created_at >= since,
+            Order.status != "cancelled",
+        ).group_by(User.vendor_type).all()
+
+        total_orders = sum(int(row.order_count or 0) for row in rows)
+        category_counts = {
+            (row.vendor_type or "unknown"): int(row.order_count or 0)
+            for row in rows
+        }
+        food_orders = category_counts.get("food", 0)
+        stationery_orders = category_counts.get("stationery", 0)
+        trending_category = "unknown"
+        if category_counts:
+            trending_category = max(category_counts.items(), key=lambda entry: entry[1])[0]
+
         return {
-            "food_orders": 850,
-            "stationery_orders": 150,
-            "food_percentage": 85.0,
-            "trending_category": "food"
+            "food_orders": food_orders,
+            "stationery_orders": stationery_orders,
+            "food_percentage": round(((food_orders / total_orders) * 100), 1) if total_orders else 0.0,
+            "trending_category": trending_category,
         }
 
     def _analyze_vendor_performance_trends(self, since: datetime) -> List[Dict[str, Any]]:
         """Analyze vendor performance trends"""
 
-        # Mock trends - would analyze completion rates, ratings, etc.
-        return [
-            {"vendor_id": 1, "trend": "improving", "completion_rate_change": 5.2},
-            {"vendor_id": 2, "trend": "stable", "completion_rate_change": 0.1},
-            {"vendor_id": 3, "trend": "declining", "completion_rate_change": -3.8}
-        ]
+        now = utcnow_naive()
+        period_days = max((now - since).days, 1)
+        previous_start = since - timedelta(days=period_days)
+
+        vendor_rows = self.db.query(Order.vendor_id).filter(
+            Order.created_at >= previous_start,
+            Order.status != "cancelled",
+        ).distinct().all()
+
+        trends: List[Dict[str, Any]] = []
+        for vendor_row in vendor_rows:
+            vendor_id = vendor_row.vendor_id
+
+            current_total = self.db.query(func.count(Order.id)).filter(
+                Order.vendor_id == vendor_id,
+                Order.created_at >= since,
+            ).scalar() or 0
+            current_completed = self.db.query(func.count(Order.id)).filter(
+                Order.vendor_id == vendor_id,
+                Order.created_at >= since,
+                Order.status == "completed",
+            ).scalar() or 0
+
+            previous_total = self.db.query(func.count(Order.id)).filter(
+                Order.vendor_id == vendor_id,
+                Order.created_at >= previous_start,
+                Order.created_at < since,
+            ).scalar() or 0
+            previous_completed = self.db.query(func.count(Order.id)).filter(
+                Order.vendor_id == vendor_id,
+                Order.created_at >= previous_start,
+                Order.created_at < since,
+                Order.status == "completed",
+            ).scalar() or 0
+
+            current_rate = (current_completed / current_total) if current_total else 0.0
+            previous_rate = (previous_completed / previous_total) if previous_total else current_rate
+            change_pct = round((current_rate - previous_rate) * 100, 1)
+
+            if change_pct > 2:
+                trend = "improving"
+            elif change_pct < -2:
+                trend = "declining"
+            else:
+                trend = "stable"
+
+            trends.append(
+                {
+                    "vendor_id": vendor_id,
+                    "trend": trend,
+                    "completion_rate_change": change_pct,
+                }
+            )
+
+        trends.sort(key=lambda row: abs(row["completion_rate_change"]), reverse=True)
+        return trends[:5]
 
     def _generate_demand_forecast(self, since: datetime) -> Dict[str, Any]:
         """Generate basic demand forecast"""
@@ -203,7 +320,7 @@ class UsagePatterns:
             Order.created_at >= since
         ).scalar()
 
-        days = (datetime.utcnow() - since).days
+        days = (utcnow_naive() - since).days
         daily_avg = recent_orders / max(days, 1)
 
         # Project next 7 days

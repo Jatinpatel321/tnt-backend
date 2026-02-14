@@ -1,7 +1,9 @@
-from sqlalchemy import Column, Integer, ForeignKey, Enum, DateTime, String
-from app.database.base import Base
-from datetime import datetime
 import enum
+
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String
+
+from app.core.time_utils import utcnow_naive
+from app.database.base import Base
 
 
 class LedgerType(enum.Enum):
@@ -12,6 +14,7 @@ class LedgerType(enum.Enum):
 class LedgerSource(enum.Enum):
     PAYMENT = "payment"
     REFUND = "refund"
+    VOUCHER = "voucher"
 
 
 class Ledger(Base):
@@ -27,4 +30,4 @@ class Ledger(Base):
     source = Column(Enum(LedgerSource), nullable=False)
 
     description = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)

@@ -1,117 +1,116 @@
-import requests
-import json
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-BASE_URL = "http://localhost:8000"
+from app.core.deps import get_db
+from app.core.security import get_current_user
+from app.database.base import Base
+from app.main import app
+from app.modules.rewards.model import RewardType
+from app.modules.rewards.service import award_points
+from app.modules.users.model import User, UserRole
 
-def test_rewards_flow():
-    print("🧪 Testing Rewards System")
 
-    # Step 1: Send OTP
-    print("\n1. Sending OTP...")
-    otp_response = requests.post(f"{BASE_URL}/auth/send-otp", json={"phone": "9999999999"})
-    print(f"OTP Response: {otp_response.status_code}")
-    if otp_response.status_code != 200:
-        print("Failed to send OTP")
-        return
+@pytest.fixture()
+def test_db_session():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
 
-    # Extract OTP from response (in real app, this would be sent via SMS)
-    otp_data = otp_response.json()
-    print(f"OTP sent: {otp_data}")
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=engine)
 
-    # For testing, we'll assume OTP is "123456" or extract from logs
-    # In production, you'd receive this via SMS
-    test_otp = "123456"
 
-    # Step 2: Verify OTP and login
-    print("\n2. Verifying OTP and logging in...")
-    verify_response = requests.post(f"{BASE_URL}/auth/verify-otp", json={
-        "phone": "9999999999",
-        "otp": test_otp
-    })
-    print(f"Verify Response: {verify_response.status_code}")
-    if verify_response.status_code != 200:
-        print("Failed to verify OTP")
-        return
+@pytest.fixture()
+def seed_data(test_db_session):
+    admin = User(phone="7200000001", name="Admin", role=UserRole.ADMIN, is_active=True)
+    student = User(phone="7200000002", name="Student", role=UserRole.STUDENT, is_active=True)
+    test_db_session.add_all([admin, student])
+    test_db_session.commit()
+    test_db_session.refresh(admin)
+    test_db_session.refresh(student)
+    return {"admin": admin, "student": student}
 
-    verify_data = verify_response.json()
-    token = verify_data.get("access_token")
-    print(f"Login successful. Token: {token[:20]}...")
 
-    headers = {"Authorization": f"Bearer {token}"}
+@pytest.fixture()
+def auth_context(seed_data):
+    student = seed_data["student"]
+    return {"id": student.id, "phone": student.phone, "role": student.role.value}
 
-    # Step 3: Check initial points
-    print("\n3. Checking initial points...")
-    points_response = requests.get(f"{BASE_URL}/rewards/points", headers=headers)
-    print(f"Points Response: {points_response.status_code}")
-    if points_response.status_code == 200:
-        points_data = points_response.json()
-        print(f"Initial points: {points_data['current_points']}")
 
-    # Step 4: Get available redemptions
-    print("\n4. Getting available redemptions...")
-    redemptions_response = requests.get(f"{BASE_URL}/rewards/redemptions", headers=headers)
-    print(f"Redemptions Response: {redemptions_response.status_code}")
-    if redemptions_response.status_code == 200:
-        redemptions_data = redemptions_response.json()
-        print(f"Available redemptions: {len(redemptions_data)} options")
+@pytest.fixture()
+def client(test_db_session, auth_context):
+    def override_get_db():
+        try:
+            yield test_db_session
+        finally:
+            pass
 
-    # Step 5: Initialize reward rules (admin function)
-    print("\n5. Initializing reward rules...")
-    rules_response = requests.post(f"{BASE_URL}/rewards/initialize-rules", headers=headers)
-    print(f"Rules Response: {rules_response.status_code}")
-    if rules_response.status_code == 200:
-        print("Reward rules initialized")
+    def override_get_current_user():
+        return auth_context
 
-    # Step 6: Create a test order to earn points
-    print("\n6. Creating test order to earn points...")
-    # First get available slots
-    slots_response = requests.get(f"{BASE_URL}/slots", headers=headers)
-    if slots_response.status_code == 200:
-        slots_data = slots_response.json()
-        if slots_data:
-            slot_id = slots_data[0]['id']
-            print(f"Using slot ID: {slot_id}")
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_get_current_user
 
-            # Create order
-            order_response = requests.post(f"{BASE_URL}/orders", json={"slot_id": slot_id}, headers=headers)
-            print(f"Order Response: {order_response.status_code}")
-            if order_response.status_code == 200:
-                order_data = order_response.json()
-                order_id = order_data['id']
-                print(f"Order created: {order_id}")
+    with TestClient(app) as test_client:
+        yield test_client
 
-                # Simulate order completion to earn points
-                # In real scenario, vendor would mark as completed
-                # For testing, we'll call the internal service
-                print("Note: Points will be awarded when order is marked as completed by vendor")
+    app.dependency_overrides.clear()
 
-    # Step 7: Check points after order
-    print("\n7. Checking points after order...")
-    points_response = requests.get(f"{BASE_URL}/rewards/points", headers=headers)
-    if points_response.status_code == 200:
-        points_data = points_response.json()
-        print(f"Points after order: {points_data['current_points']}")
 
-    # Step 8: Test redemption (if enough points)
-    if points_data['current_points'] >= 50:  # Minimum for discount_percentage
-        print("\n8. Testing points redemption...")
-        redeem_response = requests.post(f"{BASE_URL}/rewards/redeem", json={
+def test_rewards_flow(client, test_db_session, seed_data, auth_context):
+    admin = seed_data["admin"]
+    student = seed_data["student"]
+
+    init_as_student = client.post("/rewards/initialize-rules")
+    assert init_as_student.status_code == 403
+
+    auth_context.update({"id": admin.id, "phone": admin.phone, "role": admin.role.value})
+    init_as_admin = client.post("/rewards/initialize-rules")
+    assert init_as_admin.status_code == 200
+
+    auth_context.update({"id": student.id, "phone": student.phone, "role": student.role.value})
+
+    before_points = client.get("/rewards/points")
+    assert before_points.status_code == 200
+    assert before_points.json()["current_points"] == 0.0
+
+    award_points(
+        user_id=student.id,
+        reward_type=RewardType.ORDER_COMPLETION,
+        points=120.0,
+        description="Test award",
+        db=test_db_session,
+    )
+
+    after_points = client.get("/rewards/points")
+    assert after_points.status_code == 200
+    assert after_points.json()["current_points"] == 120.0
+
+    redemptions = client.get("/rewards/redemptions")
+    assert redemptions.status_code == 200
+    assert len(redemptions.json()) >= 1
+
+    redeem_resp = client.post(
+        "/rewards/redeem",
+        json={
             "redemption_type": "discount_percentage",
             "points_used": 50,
-            "value": 10  # 10% discount
-        }, headers=headers)
-        print(f"Redeem Response: {redeem_response.status_code}")
-        if redeem_response.status_code == 200:
-            redeem_data = redeem_response.json()
-            print(f"Redemption successful: {redeem_data}")
+            "value": 10,
+        },
+    )
+    assert redeem_resp.status_code == 200
 
-            # Check points after redemption
-            points_response = requests.get(f"{BASE_URL}/rewards/points", headers=headers)
-            if points_response.status_code == 200:
-                points_data = points_response.json()
-                print(f"Points after redemption: {points_data['current_points']}")
-
-    print("\n✅ Rewards system test completed!")
-
-if __name__ == "__main__":
-    test_rewards_flow()
+    final_points = client.get("/rewards/points")
+    assert final_points.status_code == 200
+    assert final_points.json()["current_points"] == 70.0

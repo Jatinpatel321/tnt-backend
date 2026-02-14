@@ -1,13 +1,21 @@
+from datetime import datetime
+from typing import Any, Dict, List
+
+from sqlalchemy import func
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+
+from app.core.time_utils import utcnow_naive
+from app.modules.orders.model import Order
+from app.modules.slots.model import Slot
+
+from .learning.preference_engine import PreferenceEngine
 from .planners.demand_planner import DemandPlanner
-from .planners.slot_planner import SlotPlanner
-from .planners.vendor_ranker import VendorRanker
 from .planners.eta_engine import ETAEngine
 from .planners.reorder_engine import ReorderEngine
-from .learning.preference_engine import PreferenceEngine
-from .utils.scoring import SlotScoring, VendorScoring
+from .planners.slot_planner import SlotPlanner
+from .planners.vendor_ranker import VendorRanker
 from .schemas import *
+from .utils.scoring import SlotScoring, VendorScoring
 
 
 class AIIntelligenceService:
@@ -113,11 +121,85 @@ class AIIntelligenceService:
 
     def get_group_coordination(self, user_ids: List[int]) -> GroupCoordinationResponse:
         """Get group coordination intelligence"""
-        # This is a placeholder for future group cart integration
+        if not user_ids:
+            return GroupCoordinationResponse(
+                overlapping_windows=[],
+                suggested_unified_slot=None,
+                coordination_score=0.0,
+            )
+
+        thirty_days_ago = utcnow_naive().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        user_hour_maps: Dict[int, Dict[int, int]] = {}
+        for user_id in user_ids:
+            hourly_distribution = self.db.query(
+                func.extract("hour", Order.created_at).label("hour"),
+                func.count(Order.id).label("order_count"),
+            ).filter(
+                Order.user_id == user_id,
+                Order.created_at >= thirty_days_ago,
+            ).group_by(func.extract("hour", Order.created_at)).all()
+
+            user_hour_maps[user_id] = {
+                int(row.hour): int(row.order_count)
+                for row in hourly_distribution
+            }
+
+        overlapping_windows: List[Dict[str, Any]] = []
+        for hour in range(24):
+            participants = [
+                user_id for user_id, hour_map in user_hour_maps.items()
+                if hour_map.get(hour, 0) > 0
+            ]
+            if len(participants) >= 2:
+                confidence = len(participants) / len(user_ids)
+                overlapping_windows.append(
+                    {
+                        "hour": hour,
+                        "participants": participants,
+                        "confidence": round(confidence, 2),
+                    }
+                )
+
+        overlapping_windows.sort(
+            key=lambda row: (row["confidence"], len(row["participants"])),
+            reverse=True,
+        )
+
+        suggested_slot_id = None
+        if overlapping_windows:
+            candidate_hours = [window["hour"] for window in overlapping_windows[:3]]
+            candidate_slots = self.db.query(Slot).filter(
+                Slot.status != "full",
+            ).all()
+
+            scored_slots: list[tuple[int, float]] = []
+            for slot in candidate_slots:
+                slot_hour = slot.start_time.hour
+                if slot_hour not in candidate_hours:
+                    continue
+
+                remaining_capacity = max(0, slot.max_orders - slot.current_orders)
+                normalized_capacity = remaining_capacity / max(slot.max_orders, 1)
+                hour_confidence = next(
+                    (window["confidence"] for window in overlapping_windows if window["hour"] == slot_hour),
+                    0.0,
+                )
+                scored_slots.append((slot.id, (0.7 * hour_confidence) + (0.3 * normalized_capacity)))
+
+            if scored_slots:
+                scored_slots.sort(key=lambda row: row[1], reverse=True)
+                suggested_slot_id = scored_slots[0][0]
+
+        coordination_score = 0.0
+        if overlapping_windows:
+            top_confidence = overlapping_windows[0]["confidence"]
+            coordination_score = round(min(1.0, top_confidence * 1.1), 2)
+
         return GroupCoordinationResponse(
-            overlapping_windows=[],
-            suggested_unified_slot=None,
-            coordination_score=0.0
+            overlapping_windows=overlapping_windows,
+            suggested_unified_slot=suggested_slot_id,
+            coordination_score=coordination_score,
         )
 
     def _generate_slot_reasoning(self, slot: Slot, score: float, speed_score: float, completion_rate: float) -> str:
@@ -152,7 +234,7 @@ class AIIntelligenceService:
         """Generate rush hour alerts"""
         alerts = []
 
-        current_hour = datetime.utcnow().hour
+        current_hour = utcnow_naive().hour
 
         # Peak lunch hours
         if 12 <= current_hour <= 14:
@@ -179,13 +261,14 @@ class AIIntelligenceService:
         alerts = []
 
         # Check user's upcoming orders
-        from app.modules.orders.model import Order
         from datetime import datetime, timedelta
+
+        from app.modules.orders.model import Order
 
         upcoming_orders = self.db.query(Order).filter(
             Order.user_id == user_id,
             Order.status.in_(["confirmed", "preparing"]),
-            Order.created_at >= datetime.utcnow() - timedelta(hours=2)
+            Order.created_at >= utcnow_naive() - timedelta(hours=2)
         ).all()
 
         for order in upcoming_orders:

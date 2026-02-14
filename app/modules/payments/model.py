@@ -1,7 +1,9 @@
-from sqlalchemy import Column, Integer, ForeignKey, Enum, DateTime, String
-from app.database.base import Base
-from datetime import datetime
 import enum
+
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String
+
+from app.core.time_utils import utcnow_naive
+from app.database.base import Base
 
 
 class PaymentStatus(enum.Enum):
@@ -27,4 +29,4 @@ class Payment(Base):
     razorpay_refund_id = Column(String, nullable=True)
     refunded_at = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)

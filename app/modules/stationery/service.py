@@ -1,6 +1,7 @@
-from sqlalchemy.orm import Session
 from fastapi import HTTPException
-from app.modules.stationery.job_model import StationeryJob, JobStatus
+from sqlalchemy.orm import Session
+
+from app.modules.stationery.job_model import JobStatus, StationeryJob
 from app.modules.stationery.service_model import StationeryService
 
 

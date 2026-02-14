@@ -1,9 +1,14 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
-from app.modules.users.model import User, UserRole
+from typing import Any, Dict, List
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.load_insights import get_load_label, is_express_pickup_eligible
+from app.core.time_utils import utcnow_naive
 from app.modules.orders.model import Order, OrderStatus
+from app.modules.slots.model import Slot
+from app.modules.users.model import User, UserRole
 
 
 class VendorRanker:
@@ -25,12 +30,14 @@ class VendorRanker:
         for vendor in vendors:
             rank_score = self._calculate_vendor_rank_score(vendor.id)
             load_indicator = self._calculate_live_load_indicator(vendor.id)
+            express_pickup_eligible = self._calculate_express_pickup_eligibility(vendor.id)
             reasoning = self._generate_ranking_reasoning(vendor.id, rank_score, load_indicator)
 
             rankings.append({
                 "vendor_id": vendor.id,
                 "vendor_rank_score": rank_score,
                 "live_load_indicator": load_indicator,
+                "express_pickup_eligible": express_pickup_eligible,
                 "reasoning": reasoning
             })
 
@@ -42,7 +49,7 @@ class VendorRanker:
     def _calculate_vendor_rank_score(self, vendor_id: int) -> float:
         """Calculate comprehensive vendor rank score (0-100)"""
 
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        thirty_days_ago = utcnow_naive() - timedelta(days=30)
 
         # Factor 1: Completion speed (30%)
         completion_speed = self._calculate_completion_speed(vendor_id, thirty_days_ago)
@@ -83,17 +90,16 @@ class VendorRanker:
         total_capacity = sum(slot.max_orders for slot in current_slots)
         current_orders = sum(slot.current_orders for slot in current_slots)
 
-        if total_capacity == 0:
-            return "LOW"
+        return get_load_label(current_orders, total_capacity)
 
-        utilization_rate = current_orders / total_capacity
+    def _calculate_express_pickup_eligibility(self, vendor_id: int) -> bool:
+        current_slots = self.db.query(Slot).filter(Slot.vendor_id == vendor_id).all()
+        if not current_slots:
+            return False
 
-        if utilization_rate >= 0.8:
-            return "HIGH"
-        elif utilization_rate >= 0.5:
-            return "MEDIUM"
-        else:
-            return "LOW"
+        total_capacity = sum(slot.max_orders for slot in current_slots)
+        current_orders = sum(slot.current_orders for slot in current_slots)
+        return is_express_pickup_eligible(current_orders, total_capacity)
 
     def _calculate_completion_speed(self, vendor_id: int, since: datetime) -> float:
         """Calculate average completion speed score"""
@@ -188,7 +194,7 @@ class VendorRanker:
     def _calculate_recent_performance(self, vendor_id: int) -> float:
         """Calculate recent 7-day performance"""
 
-        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        seven_days_ago = utcnow_naive() - timedelta(days=7)
 
         recent_completion_rate = self._calculate_success_rate(vendor_id, seven_days_ago)
 

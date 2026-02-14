@@ -1,10 +1,10 @@
-from sqlalchemy.orm import Session
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
 
-from app.modules.orders.model import Order, OrderStatus
-from app.modules.slots.model import Slot
 from app.modules.orders.history_model import OrderHistory
+from app.modules.orders.model import Order, OrderStatus
 from app.modules.rewards.service import process_order_completion_rewards
+from app.modules.slots.model import Slot
 
 
 def create_order(user_id: int, slot_id: int, db: Session):
@@ -69,3 +69,6 @@ def update_order_status(
         status=new_status
     )
     db.add(history)
+
+    if new_status == OrderStatus.COMPLETED:
+        process_order_completion_rewards(order.id, db)

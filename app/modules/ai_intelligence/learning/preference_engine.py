@@ -1,9 +1,12 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
-from app.modules.orders.model import Order, OrderItem
+from typing import Any, Dict, List
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.time_utils import utcnow_naive
 from app.modules.menu.model import MenuItem
+from app.modules.orders.model import Order, OrderItem
 
 
 class PreferenceEngine:
@@ -15,7 +18,7 @@ class PreferenceEngine:
     def get_personalization(self, user_id: int) -> Dict[str, Any]:
         """Get personalized recommendations for user"""
 
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        thirty_days_ago = utcnow_naive() - timedelta(days=30)
 
         # Analyze user preferences
         frequent_items = self._get_frequent_items(user_id, thirty_days_ago)
@@ -151,7 +154,7 @@ class PreferenceEngine:
         suggestions = []
 
         # Time-based suggestion
-        current_hour = datetime.utcnow().hour
+        current_hour = utcnow_naive().hour
         preferred_hour = preferred_times.get("preferred_hour", 12)
 
         if abs(current_hour - preferred_hour) <= 2:
@@ -173,7 +176,7 @@ class PreferenceEngine:
             })
 
         # Reorder reminder (if no recent orders)
-        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        seven_days_ago = utcnow_naive() - timedelta(days=7)
         recent_orders = self.db.query(Order).filter(
             Order.user_id == user_id,
             Order.created_at >= seven_days_ago

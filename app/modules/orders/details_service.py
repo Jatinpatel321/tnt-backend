@@ -1,9 +1,9 @@
-from sqlalchemy.orm import Session
-from fastapi import HTTPException
-
-from app.modules.orders.model import Order
 from app.modules.orders.item_model import OrderItem
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
 from app.modules.menu.model import MenuItem
+from app.modules.orders.model import Order
 
 
 def get_vendor_order_details(order_id: int, vendor_id: int, db: Session):

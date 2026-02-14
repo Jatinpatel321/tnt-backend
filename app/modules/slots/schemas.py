@@ -1,6 +1,8 @@
-from pydantic import BaseModel
 from datetime import datetime
 from enum import Enum
+
+from pydantic import BaseModel, ConfigDict
+
 
 class SlotStatus(str, Enum):
     available = "available"
@@ -20,6 +22,7 @@ class SlotResponse(BaseModel):
     max_orders: int
     current_orders: int
     status: SlotStatus
+    load_label: str = "LOW"
+    express_pickup_eligible: bool = False
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

@@ -1,5 +1,6 @@
-from sqlalchemy.orm import Session
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
 from app.modules.menu.model import MenuItem
 from app.modules.orders.model import OrderItem
 
@@ -34,3 +35,7 @@ def add_items_to_order(order, items, db: Session):
         db.add(order_item)
 
     return total
+
+
+def get_order_items(order_id: int, db: Session):
+    return db.query(OrderItem).filter(OrderItem.order_id == order_id).all()

@@ -1,6 +1,11 @@
+import logging
+
 from sqlalchemy.orm import Session
-from app.modules.notifications.model import Notification
+
 from app.core.sms import send_sms
+from app.modules.notifications.model import Notification
+
+logger = logging.getLogger("tnt.notifications")
 
 
 def notify_user(
@@ -18,6 +23,12 @@ def notify_user(
     )
 
     db.add(notification)
+    db.flush()
 
     if send_sms_flag:
-        send_sms(phone, message)
+        try:
+            send_sms(phone, message)
+        except Exception:
+            logger.exception("notification_sms_failed user_id=%s phone=%s", user_id, phone)
+
+    return notification

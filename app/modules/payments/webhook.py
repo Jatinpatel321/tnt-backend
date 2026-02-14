@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Request, Header, Depends
+from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
 from app.core.razorpay_webhook import verify_webhook_signature
-from app.modules.payments.model import Payment, PaymentStatus
+from app.core.redis import redis_client
 from app.modules.orders.model import Order, OrderStatus
+from app.modules.payments.model import Payment, PaymentStatus
 
 router = APIRouter(prefix="/webhooks/razorpay", tags=["Razorpay Webhooks"])
 
@@ -24,6 +25,11 @@ async def razorpay_webhook(
     entity = payload["payload"]["payment"]["entity"]
 
     razorpay_payment_id = entity.get("id")
+    idempotency_key = f"webhook:razorpay:{event}:{razorpay_payment_id}"
+
+    is_first = redis_client.set(idempotency_key, "1", nx=True, ex=3600)
+    if not is_first:
+        return {"status": "duplicate_ignored"}
 
     payment = (
         db.query(Payment)

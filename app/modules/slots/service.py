@@ -1,8 +1,10 @@
-from sqlalchemy.orm import Session
-from fastapi import HTTPException
-from app.modules.slots.model import Slot, SlotStatus
-from app.core.redis import redis_client
 import time
+
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from app.core.redis import redis_client
+from app.modules.slots.model import Slot, SlotStatus
 
 LOCK_TTL = 5  # seconds
 

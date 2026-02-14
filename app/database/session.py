@@ -1,8 +1,9 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
 import os
 from pathlib import Path
+
+from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 # 🔥 EXPLICITLY LOAD .env FROM PROJECT ROOT
 BASE_DIR = Path(__file__).resolve().parent.parent.parent

@@ -1,4 +1,6 @@
-from typing import Dict, Any
+from typing import Any, Dict
+
+from app.core.time_utils import utcnow_naive
 from app.modules.slots.model import Slot
 
 
@@ -79,11 +81,13 @@ class VendorScoring:
     def calculate_vendor_speed_score(vendor_id: int, db) -> float:
         """Calculate vendor speed score based on completion times"""
 
-        from sqlalchemy import func
         from datetime import datetime, timedelta
+
+        from sqlalchemy import func
+
         from app.modules.orders.model import Order, OrderStatus
 
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        thirty_days_ago = utcnow_naive() - timedelta(days=30)
 
         # Average completion time vs ETA
         avg_completion_vs_eta = db.query(
@@ -114,9 +118,10 @@ class VendorScoring:
         """Calculate historical completion rate"""
 
         from datetime import datetime, timedelta
+
         from app.modules.orders.model import Order, OrderStatus
 
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        thirty_days_ago = utcnow_naive() - timedelta(days=30)
 
         completed_orders = db.query(Order).filter(
             Order.vendor_id == vendor_id,

@@ -1,229 +1,168 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
 
+from app.core.load_insights import get_load_label, is_express_pickup_eligible
 from app.core.deps import get_db
-from app.modules.users.model import User, UserRole, VendorType
-from app.database.base import Base
-
-# Import models that will be created
-# from app.modules.vendors.model import Vendor
+from app.modules.menu.model import MenuItem
+from app.modules.slots.model import Slot, SlotStatus
+from app.modules.stationery.service_model import StationeryService
+from app.modules.users.model import User, UserRole
+from app.modules.vendors.schemas import (
+    VendorMenuItemResponse,
+    VendorResponse,
+    VendorSlotResponse,
+)
 
 router = APIRouter(prefix="/vendors", tags=["Vendors"])
 
 
-# Temporary mock data until we create proper models
-class MockVendor:
-    def __init__(self, id, name, description, vendor_type, is_approved, phone, is_open=True, logo_url=None):
-        self.id = id
-        self.name = name
-        self.description = description
-        self.vendor_type = vendor_type
-        self.is_approved = is_approved
-        self.phone = phone
-        self.is_open = is_open
-        self.logo_url = logo_url
+def _vendor_load_summary(vendor_id: int, db: Session) -> tuple[str, bool]:
+    slots = db.query(Slot).filter(Slot.vendor_id == vendor_id).all()
+    if not slots:
+        return "LOW", False
 
+    total_capacity = sum(slot.max_orders for slot in slots)
+    total_orders = sum(slot.current_orders for slot in slots)
+    load_label = get_load_label(total_orders, total_capacity)
+    express_eligible = is_express_pickup_eligible(total_orders, total_capacity)
+    return load_label, express_eligible
 
-# Mock vendors data
-MOCK_VENDORS = [
-    MockVendor(
-        id=1,
-        name="Campus Cafe",
-        description="Fresh coffee and snacks for students",
-        vendor_type="food",
-        is_approved=True,
-        phone="9876543210",
-        is_open=True,
-        logo_url="https://via.placeholder.com/100x100/FF6B6B/FFFFFF?text=CC"
-    ),
-    MockVendor(
-        id=2,
-        name="Food Court",
-        description="Variety of cuisines from around the world",
-        vendor_type="food",
-        is_approved=True,
-        phone="9876543211",
-        is_open=True,
-        logo_url="https://via.placeholder.com/100x100/4ECDC4/FFFFFF?text=FC"
-    ),
-    MockVendor(
-        id=3,
-        name="Quick Bites",
-        description="Fast food and beverages",
-        vendor_type="food",
-        is_approved=True,
-        phone="9876543212",
-        is_open=False,
-        logo_url="https://via.placeholder.com/100x100/45B7D1/FFFFFF?text=QB"
-    ),
-]
-
-
-@router.get("/")
+@router.get("/", response_model=list[VendorResponse])
 def get_vendors(type: str = "food", db: Session = Depends(get_db)):
     """
     Get all vendors by type (food or stationery)
     """
-    # Filter vendors by type
-    filtered_vendors = [v for v in MOCK_VENDORS if v.vendor_type == type and v.is_approved]
+    vendor_type = type.strip().lower()
+    if vendor_type not in {"food", "stationery"}:
+        raise HTTPException(status_code=400, detail="Invalid vendor type")
 
-    # Convert to dict format
-    vendors_data = []
-    for vendor in filtered_vendors:
-        vendors_data.append({
-            "id": vendor.id,
-            "name": vendor.name,
-            "description": vendor.description,
-            "vendor_type": vendor.vendor_type,
-            "is_approved": vendor.is_approved,
-            "phone": vendor.phone,
-            "is_open": vendor.is_open,
-            "logo_url": vendor.logo_url
-        })
+    vendors_query = db.query(User).filter(
+        User.role == UserRole.vendor,
+        User.is_approved == True,
+        User.is_active == True,
+    )
 
-    return vendors_data
+    if vendor_type == "food":
+        food_vendor_ids = db.query(MenuItem.vendor_id).filter(MenuItem.is_available == True).distinct()
+        vendors_query = vendors_query.filter(User.id.in_(food_vendor_ids))
+    else:
+        stationery_vendor_ids = (
+            db.query(StationeryService.vendor_id)
+            .filter(StationeryService.is_available == True)
+            .distinct()
+        )
+        vendors_query = vendors_query.filter(User.id.in_(stationery_vendor_ids))
+
+    vendors = vendors_query.all()
+
+    response = []
+    for vendor in vendors:
+        live_load_label, express_pickup_eligible = _vendor_load_summary(vendor.id, db)
+        response.append(
+            {
+                "id": vendor.id,
+                "name": vendor.name,
+                "description": f"Vendor {vendor.name or vendor.id}",
+                "vendor_type": vendor_type,
+                "is_approved": vendor.is_approved,
+                "phone": vendor.phone,
+                "is_open": True,
+                "logo_url": None,
+                "live_load_label": live_load_label,
+                "express_pickup_eligible": express_pickup_eligible,
+            }
+        )
+
+    return response
 
 
-@router.get("/{vendor_id}")
+@router.get("/{vendor_id}", response_model=VendorResponse)
 def get_vendor(vendor_id: int, db: Session = Depends(get_db)):
     """
     Get single vendor details
     """
-    vendor = next((v for v in MOCK_VENDORS if v.id == vendor_id), None)
+    vendor = db.query(User).filter(
+        User.id == vendor_id,
+        User.role == UserRole.vendor,
+        User.is_approved == True,
+    ).first()
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
+
+    load_label, express_eligible = _vendor_load_summary(vendor.id, db)
 
     return {
         "id": vendor.id,
         "name": vendor.name,
-        "description": vendor.description,
-        "vendor_type": vendor.vendor_type,
+        "description": f"Vendor {vendor.name or vendor.id}",
+        "vendor_type": "food",
         "is_approved": vendor.is_approved,
         "phone": vendor.phone,
-        "is_open": vendor.is_open,
-        "logo_url": vendor.logo_url
+        "is_open": True,
+        "logo_url": None,
+        "live_load_label": load_label,
+        "express_pickup_eligible": express_eligible,
     }
 
 
-@router.get("/{vendor_id}/menu")
+@router.get("/{vendor_id}/menu", response_model=list[VendorMenuItemResponse])
 def get_vendor_menu(vendor_id: int, db: Session = Depends(get_db)):
     """
     Get vendor menu items
     """
-    vendor = next((v for v in MOCK_VENDORS if v.id == vendor_id), None)
+    vendor = db.query(User).filter(
+        User.id == vendor_id,
+        User.role == UserRole.vendor,
+        User.is_approved == True,
+    ).first()
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
 
-    # Mock menu items
-    menu_items = [
+    menu_items = db.query(MenuItem).filter(
+        MenuItem.vendor_id == vendor_id,
+        MenuItem.is_available == True,
+    ).all()
+
+    return [
         {
-            "id": f"{vendor_id}-1",
-            "vendor_id": vendor_id,
-            "name": "Masala Dosa",
-            "description": "Crispy dosa with potato filling and chutneys",
-            "price": 80,
-            "image_url": "https://via.placeholder.com/200x200/FFE66D/000000?text=Dosa",
-            "is_available": True,
-            "is_veg": True,
-            "created_at": "2024-01-01T00:00:00Z"
-        },
-        {
-            "id": f"{vendor_id}-2",
-            "vendor_id": vendor_id,
-            "name": "Chicken Biryani",
-            "description": "Aromatic basmati rice with tender chicken",
-            "price": 120,
-            "image_url": "https://via.placeholder.com/200x200/FF6B6B/FFFFFF?text=Biryani",
-            "is_available": True,
-            "is_veg": False,
-            "created_at": "2024-01-01T00:00:00Z"
-        },
-        {
-            "id": f"{vendor_id}-3",
-            "vendor_id": vendor_id,
-            "name": "Paneer Butter Masala",
-            "description": "Creamy tomato curry with paneer cubes",
-            "price": 100,
-            "image_url": "https://via.placeholder.com/200x200/4ECDC4/FFFFFF?text=Paneer",
-            "is_available": True,
-            "is_veg": True,
-            "created_at": "2024-01-01T00:00:00Z"
-        },
-        {
-            "id": f"{vendor_id}-4",
-            "vendor_id": vendor_id,
-            "name": "Cold Coffee",
-            "description": "Chilled coffee with ice cream",
-            "price": 60,
-            "image_url": "https://via.placeholder.com/200x200/9B59B6/FFFFFF?text=Coffee",
-            "is_available": True,
-            "is_veg": True,
-            "created_at": "2024-01-01T00:00:00Z"
-        },
-        {
-            "id": f"{vendor_id}-5",
-            "vendor_id": vendor_id,
-            "name": "Veg Sandwich",
-            "description": "Grilled sandwich with fresh vegetables",
-            "price": 50,
-            "image_url": "https://via.placeholder.com/200x200/F39C12/FFFFFF?text=Sandwich",
-            "is_available": True,
-            "is_veg": True,
-            "created_at": "2024-01-01T00:00:00Z"
+            "id": item.id,
+            "vendor_id": item.vendor_id,
+            "name": item.name,
+            "description": item.description,
+            "price": item.price,
+            "image_url": item.image_url,
+            "is_available": item.is_available,
         }
+        for item in menu_items
     ]
 
-    return menu_items
 
-
-@router.get("/{vendor_id}/slots")
+@router.get("/{vendor_id}/slots", response_model=list[VendorSlotResponse])
 def get_vendor_slots(vendor_id: int, db: Session = Depends(get_db)):
     """
     Get vendor pickup slots
     """
-    vendor = next((v for v in MOCK_VENDORS if v.id == vendor_id), None)
+    vendor = db.query(User).filter(
+        User.id == vendor_id,
+        User.role == UserRole.vendor,
+        User.is_approved == True,
+    ).first()
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
 
-    # Mock slots
-    slots = [
-        {
-            "id": f"{vendor_id}-slot-1",
-            "vendor_id": vendor_id,
-            "start_time": "12:00:00",
-            "end_time": "12:30:00",
-            "is_available": True,
-            "max_orders": 10,
-            "current_orders": 3
-        },
-        {
-            "id": f"{vendor_id}-slot-2",
-            "vendor_id": vendor_id,
-            "start_time": "12:30:00",
-            "end_time": "13:00:00",
-            "is_available": True,
-            "max_orders": 10,
-            "current_orders": 7
-        },
-        {
-            "id": f"{vendor_id}-slot-3",
-            "vendor_id": vendor_id,
-            "start_time": "13:00:00",
-            "end_time": "13:30:00",
-            "is_available": True,
-            "max_orders": 10,
-            "current_orders": 2
-        },
-        {
-            "id": f"{vendor_id}-slot-4",
-            "vendor_id": vendor_id,
-            "start_time": "13:30:00",
-            "end_time": "14:00:00",
-            "is_available": False,
-            "max_orders": 10,
-            "current_orders": 10
-        }
-    ]
+    slots = db.query(Slot).filter(Slot.vendor_id == vendor_id).all()
 
-    return slots
+    return [
+        {
+            "id": slot.id,
+            "vendor_id": slot.vendor_id,
+            "start_time": slot.start_time,
+            "end_time": slot.end_time,
+            "is_available": slot.status != SlotStatus.FULL and slot.current_orders < slot.max_orders,
+            "max_orders": slot.max_orders,
+            "current_orders": slot.current_orders,
+            "load_label": get_load_label(slot.current_orders, slot.max_orders),
+            "express_pickup_eligible": is_express_pickup_eligible(slot.current_orders, slot.max_orders),
+        }
+        for slot in slots
+    ]

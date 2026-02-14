@@ -1,6 +1,8 @@
 
 import random
+
 from fastapi import HTTPException
+
 from app.core.redis import redis_client
 
 OTP_TTL = 300          # 5 minutes

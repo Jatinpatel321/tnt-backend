@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.emergency import set_emergency_shutdown
+from app.core.faculty_policy import get_faculty_priority_policy, set_faculty_priority_policy
+from app.core.university_policy import get_university_policy, set_university_policy
 from app.core.deps import get_db
 from app.core.security import require_role
-from app.modules.users.model import User, UserRole
-from app.modules.orders.model import Order
 from app.modules.ledger.model import Ledger
+from app.modules.orders.model import Order
+from app.modules.users.model import User, UserRole
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -82,9 +85,11 @@ def emergency_shutdown(
     user=Depends(require_role("admin"))
 ):
     """Enable/disable emergency shutdown mode"""
-    # This would typically set a global flag in Redis or database
-    # For now, we'll just return success
-    return {"message": f"Emergency shutdown {'enabled' if enabled else 'disabled'}"}
+    is_enabled = set_emergency_shutdown(enabled)
+    return {
+        "message": f"Emergency shutdown {'enabled' if is_enabled else 'disabled'}",
+        "enabled": is_enabled,
+    }
 
 
 # 🚩 MARK ORDER AS FRAUD
@@ -122,6 +127,60 @@ def get_analytics(
         "total_orders": total_orders,
         "total_vendors": total_vendors
     }
+
+
+@router.get("/policies/faculty-priority")
+def get_faculty_priority_policy_endpoint(user=Depends(require_role("admin"))):
+    return get_faculty_priority_policy()
+
+
+@router.post("/policies/faculty-priority")
+def set_faculty_priority_policy_endpoint(
+    enabled: bool,
+    start_hour: int = 12,
+    end_hour: int = 14,
+    user=Depends(require_role("admin")),
+):
+    if start_hour < 0 or start_hour > 23 or end_hour < 1 or end_hour > 24:
+        raise HTTPException(status_code=400, detail="Hours must be within 0-24")
+    if end_hour <= start_hour:
+        raise HTTPException(status_code=400, detail="end_hour must be greater than start_hour")
+
+    return set_faculty_priority_policy(enabled, start_hour, end_hour)
+
+
+@router.get("/policies/university")
+def get_university_policy_endpoint(user=Depends(require_role("admin"))):
+    return get_university_policy()
+
+
+@router.post("/policies/university")
+def set_university_policy_endpoint(
+    enabled: bool,
+    break_start_hour: int = 12,
+    break_end_hour: int = 14,
+    max_orders_per_user: int = 3,
+    min_slot_duration_minutes: int = 15,
+    user=Depends(require_role("admin")),
+):
+    if break_start_hour < 0 or break_start_hour > 23:
+        raise HTTPException(status_code=400, detail="break_start_hour must be in 0-23")
+    if break_end_hour < 1 or break_end_hour > 24:
+        raise HTTPException(status_code=400, detail="break_end_hour must be in 1-24")
+    if break_end_hour <= break_start_hour:
+        raise HTTPException(status_code=400, detail="break_end_hour must be greater than break_start_hour")
+    if max_orders_per_user < 1:
+        raise HTTPException(status_code=400, detail="max_orders_per_user must be at least 1")
+    if min_slot_duration_minutes < 5:
+        raise HTTPException(status_code=400, detail="min_slot_duration_minutes must be at least 5")
+
+    return set_university_policy(
+        enabled=enabled,
+        break_start_hour=break_start_hour,
+        break_end_hour=break_end_hour,
+        max_orders_per_user=max_orders_per_user,
+        min_slot_duration_minutes=min_slot_duration_minutes,
+    )
 
 
 # 📢 GLOBAL ANNOUNCEMENT

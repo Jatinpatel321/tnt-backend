@@ -1,9 +1,12 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 from datetime import datetime, timedelta
-from typing import Dict, Any
-from app.modules.slots.model import Slot
+from typing import Any, Dict
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.time_utils import utcnow_naive
 from app.modules.orders.model import Order, OrderStatus
+from app.modules.slots.model import Slot
 
 
 class ETAEngine:
@@ -53,7 +56,7 @@ class ETAEngine:
     def _calculate_base_prep_time(self, vendor_id: int) -> float:
         """Calculate base preparation time based on vendor history"""
 
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        thirty_days_ago = utcnow_naive() - timedelta(days=30)
 
         # Average completion time for vendor
         avg_completion_time = self.db.query(
@@ -86,7 +89,7 @@ class ETAEngine:
     def _calculate_vendor_efficiency_factor(self, vendor_id: int) -> float:
         """Calculate vendor efficiency factor"""
 
-        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        seven_days_ago = utcnow_naive() - timedelta(days=7)
 
         # Completion rate in last 7 days
         completed_orders = self.db.query(Order).filter(
@@ -129,7 +132,7 @@ class ETAEngine:
     def _default_eta_response(self) -> Dict[str, Any]:
         """Return default ETA response when slot not found"""
 
-        now = datetime.utcnow()
+        now = utcnow_naive()
         return {
             "predicted_eta_minutes": 15,
             "pickup_window_start": now,

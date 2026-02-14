@@ -1,6 +1,7 @@
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel
 
 
 class DemandPlanningResponse(BaseModel):
@@ -40,6 +41,7 @@ class VendorRanking(BaseModel):
     vendor_id: int
     vendor_rank_score: float
     live_load_indicator: str  # LOW, MEDIUM, HIGH
+    express_pickup_eligible: bool
     reasoning: str
 
 

@@ -1,9 +1,12 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
-from app.modules.orders.model import Order, OrderItem
+from typing import Any, Dict, List
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.time_utils import utcnow_naive
 from app.modules.menu.model import MenuItem
+from app.modules.orders.model import Order, OrderItem
 from app.modules.slots.model import Slot
 
 
@@ -17,7 +20,7 @@ class ReorderEngine:
         """Generate smart reorder suggestions for a user"""
 
         # Get user's order history
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        thirty_days_ago = utcnow_naive() - timedelta(days=30)
 
         recent_orders = self.db.query(Order).filter(
             Order.user_id == user_id,
@@ -105,11 +108,21 @@ class ReorderEngine:
         menu_item = self.db.query(MenuItem).filter(MenuItem.id == menu_item_id).first()
 
         if menu_item and "stationery" in menu_item.name.lower():
-            # Mock print settings for stationery
+            text = f"{menu_item.name} {menu_item.description or ''}".lower()
+
+            paper_type = "A4"
+            if "a3" in text:
+                paper_type = "A3"
+            elif "a5" in text:
+                paper_type = "A5"
+
+            color = "color" if "color" in text else "black_and_white"
+            sides = "double" if "double" in text or "duplex" in text else "single"
+
             return {
-                "paper_type": "A4",
-                "color": "black_and_white",
-                "sides": "single",
+                "paper_type": paper_type,
+                "color": color,
+                "sides": sides,
                 "copies": 1
             }
 

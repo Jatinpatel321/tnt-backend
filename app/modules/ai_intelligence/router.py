@@ -1,10 +1,13 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from typing import Optional
+
 from app.core.deps import get_db
 from app.core.security import get_current_user
-from .service import AIIntelligenceService
+
 from .schemas import *
+from .service import AIIntelligenceService
 
 router = APIRouter(prefix="/ai", tags=["AI Intelligence"])
 

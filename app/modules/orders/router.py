@@ -1,20 +1,30 @@
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
+from app.core.load_insights import get_load_label, is_express_pickup_eligible
 from app.core.security import get_current_user, require_role
-
-from app.modules.users.model import User
-from app.modules.orders.model import Order, OrderStatus
-from app.modules.orders.schemas import OrderResponse
-from app.modules.orders.service import create_order, update_order_status
-
-from app.modules.orders.item_schemas import OrderItemCreate
-from app.modules.orders.item_service import add_items_to_order
-
+from app.core.time_utils import utcnow_naive
+from app.core.university_policy import get_university_policy, is_hour_in_break_window
+from app.modules.menu.model import MenuItem
+from app.modules.notifications.service import notify_user
 from app.modules.orders.history_model import OrderHistory
 from app.modules.orders.history_schemas import OrderHistoryResponse
-from app.modules.notifications.service import notify_user
+from app.modules.orders.item_schemas import OrderItemCreate
+from app.modules.orders.item_service import add_items_to_order
+from app.modules.orders.model import Order, OrderStatus
+from app.modules.orders.qr_service import (
+    confirm_pickup,
+    generate_qr_code,
+    get_order_by_qr,
+)
+from app.modules.orders.reorder_service import create_reorder, get_order_eta
+from app.modules.orders.schemas import OrderResponse
+from app.modules.orders.service import create_order, update_order_status
+from app.modules.slots.model import Slot
+from app.modules.users.model import User
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 
@@ -33,6 +43,35 @@ def place_order(
     db_user = db.query(User).filter(User.phone == user["phone"]).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    slot = db.query(Slot).filter(Slot.id == slot_id).first()
+    if not slot:
+        raise HTTPException(status_code=404, detail="Slot not found")
+
+    policy = get_university_policy()
+    if policy.get("enabled", False):
+        if not is_hour_in_break_window(
+            slot.start_time.hour,
+            int(policy.get("break_start_hour", 12)),
+            int(policy.get("break_end_hour", 14)),
+        ):
+            raise HTTPException(status_code=400, detail="Orders are allowed only during university break window")
+
+        now = utcnow_naive()
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        existing_orders = (
+            db.query(Order)
+            .filter(
+                Order.user_id == db_user.id,
+                Order.created_at >= day_start,
+                Order.created_at < day_end,
+                Order.status != OrderStatus.CANCELLED,
+            )
+            .count()
+        )
+        if existing_orders >= int(policy.get("max_orders_per_user", 3)):
+            raise HTTPException(status_code=400, detail="Maximum orders per user reached for this day")
 
     # 🔑 Idempotency check
     if idempotency_key:
@@ -62,9 +101,9 @@ def place_order(
     )
 
     total_amount = add_items_to_order(order, items, db)
+    order.total_amount = total_amount
 
     # ⏱️ Calculate ETA (15-30 minutes based on slot congestion)
-    slot = db.query(Slot).filter(Slot.id == slot_id).first()
     congestion_factor = slot.congestion_level if hasattr(slot, 'congestion_level') else 0
     base_eta = 15  # minutes
     eta_minutes = base_eta + int(congestion_factor / 10)  # Add up to 10 minutes for congestion
@@ -85,7 +124,9 @@ def place_order(
         "order_id": order.id,
         "status": order.status,
         "total_amount": total_amount,
-        "eta_minutes": eta_minutes
+        "eta_minutes": eta_minutes,
+        "pickup_load_label": get_load_label(slot.current_orders, slot.max_orders),
+        "express_pickup_eligible": is_express_pickup_eligible(slot.current_orders, slot.max_orders),
     }
 
 
@@ -223,6 +264,32 @@ def order_timeline(
     )
 
 
+@router.post("/{order_id}/reorder")
+def reorder_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    db_user = db.query(User).filter(User.phone == user["phone"]).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return create_reorder(order_id, db_user.id, db)
+
+
+@router.get("/{order_id}/eta")
+def order_eta(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    db_user = db.query(User).filter(User.phone == user["phone"]).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return get_order_eta(order_id, db_user.id, db)
+
+
 # 🧾 VENDOR — ORDER DETAILS
 @router.get("/vendor/{order_id}")
 def vendor_order_details(
@@ -256,6 +323,7 @@ def generate_qr_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/qr/pickup/confirm", response_model=dict)
 @router.post("/qr/confirm", response_model=dict)
 def confirm_pickup_endpoint(
     qr_code: str,

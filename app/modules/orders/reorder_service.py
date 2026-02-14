@@ -1,12 +1,15 @@
-from sqlalchemy.orm import Session
-from fastapi import HTTPException
 from datetime import datetime, timedelta
 
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from app.core.load_insights import get_load_label, is_express_pickup_eligible
+from app.core.time_utils import utcnow_naive
+from app.modules.notifications.service import notify_user
+from app.modules.orders.item_service import add_items_to_order
 from app.modules.orders.model import Order, OrderStatus
 from app.modules.orders.service import create_order
-from app.modules.orders.item_service import add_items_to_order
-from app.modules.slots.service import book_slot
-from app.modules.notifications.service import notify_user
+from app.modules.users.model import User
 
 
 def calculate_eta(order: Order, db: Session) -> datetime:
@@ -16,7 +19,7 @@ def calculate_eta(order: Order, db: Session) -> datetime:
     slot = db.query(Slot).filter(Slot.id == order.slot_id).first()
     if not slot:
         # Default ETA: 30 minutes from now
-        return datetime.utcnow() + timedelta(minutes=30)
+        return utcnow_naive() + timedelta(minutes=30)
 
     # Base ETA is slot end time
     base_eta = slot.end_time
@@ -34,12 +37,13 @@ def calculate_eta(order: Order, db: Session) -> datetime:
 
 def detect_delay(order: Order, db: Session) -> bool:
     """Detect if order is delayed beyond ETA"""
-    if not order.estimated_ready_at:
+    estimated_ready_at = getattr(order, "estimated_ready_at", None)
+    if not estimated_ready_at:
         return False
 
     # Order is delayed if current time > ETA + 10 minutes buffer
-    delay_threshold = order.estimated_ready_at + timedelta(minutes=10)
-    return datetime.utcnow() > delay_threshold
+    delay_threshold = estimated_ready_at + timedelta(minutes=10)
+    return utcnow_naive() > delay_threshold
 
 
 def create_reorder(original_order_id: int, user_id: int, db: Session):
@@ -56,7 +60,7 @@ def create_reorder(original_order_id: int, user_id: int, db: Session):
         raise HTTPException(status_code=404, detail="Original order not found or not eligible for reorder")
 
     # Check if original order is recent (within 7 days)
-    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    seven_days_ago = utcnow_naive() - timedelta(days=7)
     if original_order.created_at < seven_days_ago:
         raise HTTPException(status_code=400, detail="Order is too old for reorder")
 
@@ -69,7 +73,7 @@ def create_reorder(original_order_id: int, user_id: int, db: Session):
 
     # Find available slot (same vendor, similar time)
     from app.modules.slots.model import Slot
-    now = datetime.utcnow()
+    now = utcnow_naive()
 
     # Look for slots in next 2 hours from same vendor
     available_slots = db.query(Slot).filter(
@@ -99,20 +103,21 @@ def create_reorder(original_order_id: int, user_id: int, db: Session):
         ]
 
         total_amount = add_items_to_order(new_order, reorder_items, db)
+        new_order.total_amount = total_amount
 
         # Calculate ETA
         eta = calculate_eta(new_order, db)
-        new_order.estimated_ready_at = eta
+        setattr(new_order, "estimated_ready_at", eta)
 
         db.commit()
         db.refresh(new_order)
 
         # Notify user
-        user = db.query(Order).join(Order.user).filter(Order.id == new_order.id).first()
+        user = db.query(User).filter(User.id == new_order.user_id).first()
         if user:
             notify_user(
-                user_id=user.user_id,
-                phone=user.user.phone if hasattr(user.user, 'phone') else None,
+                user_id=user.id,
+                phone=user.phone,
                 title="Reorder Placed",
                 message=f"Your reorder #{new_order.id} has been placed successfully.",
                 db=db
@@ -123,7 +128,9 @@ def create_reorder(original_order_id: int, user_id: int, db: Session):
             "status": new_order.status.value,
             "total_amount": total_amount,
             "estimated_ready_at": eta.isoformat(),
-            "slot_time": f"{target_slot.start_time.strftime('%I:%M %p')} - {target_slot.end_time.strftime('%I:%M %p')}"
+            "slot_time": f"{target_slot.start_time.strftime('%I:%M %p')} - {target_slot.end_time.strftime('%I:%M %p')}",
+            "pickup_load_label": get_load_label(target_slot.current_orders, target_slot.max_orders),
+            "express_pickup_eligible": is_express_pickup_eligible(target_slot.current_orders, target_slot.max_orders),
         }
 
     except Exception as e:
@@ -145,17 +152,22 @@ def get_order_eta(order_id: int, user_id: int, db: Session):
         raise HTTPException(status_code=400, detail="Order was cancelled")
 
     # Calculate ETA if not set
-    if not order.estimated_ready_at:
-        order.estimated_ready_at = calculate_eta(order, db)
-        db.commit()
+    estimated_ready_at = getattr(order, "estimated_ready_at", None)
+    if not estimated_ready_at:
+        estimated_ready_at = calculate_eta(order, db)
+        setattr(order, "estimated_ready_at", estimated_ready_at)
 
     # Check for delays
     is_delayed = detect_delay(order, db)
+    from app.modules.slots.model import Slot
+    slot = db.query(Slot).filter(Slot.id == order.slot_id).first()
 
     return {
         "order_id": order.id,
         "status": order.status.value,
-        "estimated_ready_at": order.estimated_ready_at.isoformat(),
+        "estimated_ready_at": estimated_ready_at.isoformat(),
         "is_delayed": is_delayed,
-        "delay_minutes": (datetime.utcnow() - order.estimated_ready_at).total_seconds() / 60 if is_delayed else 0
+        "delay_minutes": (utcnow_naive() - estimated_ready_at).total_seconds() / 60 if is_delayed else 0,
+        "pickup_load_label": get_load_label(slot.current_orders, slot.max_orders) if slot else "LOW",
+        "express_pickup_eligible": is_express_pickup_eligible(slot.current_orders, slot.max_orders) if slot else False,
     }

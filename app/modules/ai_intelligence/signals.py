@@ -1,5 +1,8 @@
-from typing import Dict, List, Any
 from datetime import datetime
+from typing import Any, Dict, List
+
+from app.core.time_utils import utcnow_naive
+
 from .service import AIIntelligenceService
 
 
@@ -54,7 +57,7 @@ class AISignals:
         signals = []
 
         # Check for unusual demand patterns
-        current_hour = datetime.utcnow().hour
+        current_hour = utcnow_naive().hour
 
         # High demand hours
         if current_hour in [12, 13, 19, 20]:
@@ -120,10 +123,11 @@ class AISignals:
         signals = []
 
         # Check if user hasn't ordered recently
-        from app.modules.orders.model import Order
         from datetime import timedelta
 
-        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        from app.modules.orders.model import Order
+
+        seven_days_ago = utcnow_naive() - timedelta(days=7)
 
         recent_orders = self.db.query(Order).filter(
             Order.user_id == user_id,
@@ -170,7 +174,7 @@ class AISignals:
 
         signals = []
 
-        current_hour = datetime.utcnow().hour
+        current_hour = utcnow_naive().hour
 
         # Suggest optimal ordering times
         if current_hour in [11, 18]:  # Pre-lunch, pre-dinner

@@ -1,9 +1,11 @@
-from datetime import datetime, time
-from typing import List, Dict, Any
+from datetime import datetime, time, timedelta
+from typing import Any, Dict, List
+
 from sqlalchemy.orm import Session
+
+from app.modules.menu.model import MenuItem
 from app.modules.orders.model import Order, OrderStatus
 from app.modules.slots.model import Slot
-from app.modules.menu.model import MenuItem
 from app.modules.users.model import User
 
 
@@ -57,7 +59,7 @@ class SignalService:
                 Order.user_id == user_id,
                 Order.status.in_([OrderStatus.PENDING, OrderStatus.CONFIRMED]),
                 Order.slot.has(Slot.start_time >= now),
-                Order.slot.has(Slot.start_time <= now.replace(hour=now.hour + 2))
+                Order.slot.has(Slot.start_time <= now + timedelta(hours=2))
             ).all()
 
             if upcoming_orders:
@@ -76,6 +78,7 @@ class SignalService:
     def _check_slot_suggestion_signals(user_id: int, db: Session) -> List[Dict[str, Any]]:
         """Suggest optimal slots based on user behavior and congestion"""
         signals = []
+        now = datetime.now()
 
         # Get user's order history
         user_orders = db.query(Order).filter(
@@ -96,13 +99,19 @@ class SignalService:
             best_hour = max(preferred_hours, key=preferred_hours.get)
 
             # Find slots with low congestion at preferred time
+            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+
             today_slots = db.query(Slot).filter(
-                Slot.start_time >= datetime.now(),
-                Slot.start_time <= datetime.now().replace(hour=23, minute=59),
-                Slot.start_time.hour == best_hour
+                Slot.start_time >= now,
+                Slot.start_time < day_end
             ).all()
 
-            low_congestion_slots = [s for s in today_slots if s.congestion_level < 0.7]
+            today_slots = [s for s in today_slots if s.start_time.hour == best_hour]
+
+            low_congestion_slots = [
+                s for s in today_slots if getattr(s, "congestion_level", 0) < 0.7
+            ]
 
             if low_congestion_slots:
                 signals.append({
@@ -122,7 +131,7 @@ class SignalService:
         signals = []
 
         # Get completed orders from last 30 days
-        thirty_days_ago = datetime.now().replace(day=datetime.now().day - 30)
+        thirty_days_ago = datetime.now() - timedelta(days=30)
         recent_orders = db.query(Order).filter(
             Order.user_id == user_id,
             Order.status == OrderStatus.COMPLETED,

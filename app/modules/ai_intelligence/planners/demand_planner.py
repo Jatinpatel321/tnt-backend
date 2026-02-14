@@ -1,7 +1,10 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.time_utils import utcnow_naive
 from app.modules.orders.model import Order
 from app.modules.slots.model import Slot
 
@@ -15,7 +18,7 @@ class DemandPlanner:
     def get_demand_planning(self, vendor_id: int) -> Dict[str, Any]:
         """Generate comprehensive demand planning for vendor"""
 
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        thirty_days_ago = utcnow_naive() - timedelta(days=30)
 
         # Analyze historical demand patterns
         demand_patterns = self._analyze_demand_patterns(vendor_id, thirty_days_ago)
@@ -74,7 +77,7 @@ class DemandPlanner:
             Order.created_at >= since
         ).scalar()
 
-        days = (datetime.utcnow() - since).days
+        days = (utcnow_naive() - since).days
         daily_avg = recent_orders / max(days, 1)
 
         # Forecast next 7 days with slight growth assumption

@@ -1,5 +1,6 @@
-from sqlalchemy.orm import Session
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
 from app.modules.menu.model import MenuItem
 
 

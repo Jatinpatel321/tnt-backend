@@ -1,13 +1,13 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Form
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
-from app.core.security import get_current_user, require_role
-from app.modules.users.model import User
-from app.modules.stationery.service_model import StationeryService
-from app.modules.stationery.job_model import StationeryJob, JobStatus
 from app.core.file_upload_stationery import save_stationery_file
+from app.core.security import get_current_user, require_role
 from app.modules.notifications.service import notify_user
+from app.modules.stationery.job_model import JobStatus, StationeryJob
+from app.modules.stationery.service_model import StationeryService
+from app.modules.users.model import User
 
 router = APIRouter(prefix="/stationery", tags=["Stationery"])
 
@@ -20,7 +20,11 @@ def add_service(
     db: Session = Depends(get_db),
     user=Depends(require_role("vendor"))
 ):
-    vendor = db.query(User).filter(User.phone == user["phone"]).first()
+    vendor = db.query(User).filter(User.id == user["id"]).first()
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    if (vendor.vendor_type or "food").lower() != "stationery":
+        raise HTTPException(status_code=403, detail="Only stationery vendors can manage stationery services")
 
     service = StationeryService(
         vendor_id=vendor.id,
@@ -45,11 +49,16 @@ def submit_job(
     db: Session = Depends(get_db),
     user=Depends(get_current_user)
 ):
-    student = db.query(User).filter(User.phone == user["phone"]).first()
+    student = db.query(User).filter(User.id == user["id"]).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="User not found")
+
     service = db.query(StationeryService).filter(
         StationeryService.id == service_id,
         StationeryService.is_available == True
     ).first()
+    if not service:
+        raise HTTPException(status_code=404, detail="Service not found or unavailable")
 
     file_url = save_stationery_file(file)
 
@@ -66,6 +75,8 @@ def submit_job(
     db.refresh(job)
 
     vendor = db.query(User).filter(User.id == service.vendor_id).first()
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
 
     notify_user(
         user_id=vendor.id,
@@ -86,17 +97,26 @@ def update_job_status(
     db: Session = Depends(get_db),
     user=Depends(require_role("vendor"))
 ):
-    vendor = db.query(User).filter(User.phone == user["phone"]).first()
+    vendor = db.query(User).filter(User.id == user["id"]).first()
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    if (vendor.vendor_type or "food").lower() != "stationery":
+        raise HTTPException(status_code=403, detail="Only stationery vendors can update stationery jobs")
+
     job = db.query(StationeryJob).filter(
         StationeryJob.id == job_id,
         StationeryJob.vendor_id == vendor.id
     ).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
 
     job.status = status
     db.commit()
 
     if status == JobStatus.READY:
         student = db.query(User).filter(User.id == job.user_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
 
         notify_user(
             user_id=student.id,

@@ -1,21 +1,28 @@
-from sqlalchemy.orm import Session
+import hashlib
+import hmac
+import os
+
 from fastapi import HTTPException
-from app.modules.payments.model import Payment, PaymentStatus
-from app.modules.orders.model import Order, OrderStatus
+from sqlalchemy.orm import Session
+
 from app.core.razorpay_client import client
-import hmac, hashlib, os
-from datetime import datetime
-from app.modules.payments.model import Payment, PaymentStatus
+from app.core.time_utils import utcnow_naive
+from app.modules.ledger.model import LedgerSource, LedgerType
 from app.modules.ledger.service import add_ledger_entry
-from app.modules.ledger.model import LedgerType, LedgerSource
 from app.modules.notifications.service import notify_user
+from app.modules.orders.model import Order, OrderStatus
+from app.modules.payments.model import Payment, PaymentStatus
 from app.modules.users.model import User
 
 
-def initiate_payment(order_id: int, amount: int, db: Session):
+def initiate_payment(order_id: int, db: Session):
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    amount = int(order.total_amount or 0)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Order amount is invalid")
 
     razorpay_order = client.order.create({
         "amount": amount,
@@ -89,10 +96,19 @@ def verify_payment(
 
 
 
-def refund_payment(payment_id: int, db):
+def refund_payment(payment_id: int, user: dict, db):
     payment = db.query(Payment).filter(Payment.id == payment_id).first()
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found")
+
+    order = db.query(Order).filter(Order.id == payment.order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    role = (user.get("role") or "").lower()
+    is_admin = role in {"admin", "super_admin"}
+    if not is_admin and order.user_id != user.get("id"):
+        raise HTTPException(status_code=403, detail="Not authorized to refund this payment")
 
     if payment.status != PaymentStatus.SUCCESS:
         raise HTTPException(
@@ -110,9 +126,8 @@ def refund_payment(payment_id: int, db):
 
     payment.status = PaymentStatus.REFUNDED
     payment.razorpay_refund_id = refund["id"]
-    payment.refunded_at = datetime.utcnow()
+    payment.refunded_at = utcnow_naive()
 
-    order = db.query(Order).filter(Order.id == payment.order_id).first()
     order.status = OrderStatus.CANCELLED
 
     add_ledger_entry(

@@ -1,20 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.deps import get_db
+from app.core.security import create_access_token
+from app.modules.auth.otp_service import generate_otp, verify_otp
 from app.modules.auth.schemas import LoginRequest, VerifyOTPRequest
-from app.core.security import create_access_token
-from app.core.deps import get_db
-from app.modules.users import User
-from fastapi import APIRouter, HTTPException
-from app.modules.auth.otp_service import generate_otp
-from app.modules.auth.otp_service import verify_otp
-from app.core.security import create_access_token
-from sqlalchemy.orm import Session
-from fastapi import Depends
-from app.core.deps import get_db
-from app.modules.users.model import User
-
-
+from app.modules.users.model import User, UserRole
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -25,9 +16,6 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 def send_otp(body: LoginRequest):
     otp = generate_otp(body.phone)
 
-    # TEMP: log OTP (remove in prod)
-    print(f"OTP for {body.phone}: {otp}")
-
     return {"message": "OTP sent"}
 
 @router.post("/verify-otp")
@@ -35,10 +23,6 @@ def verify_otp_login(
     body: VerifyOTPRequest,
     db: Session = Depends(get_db)
 ):
-    from app.modules.users.model import User, UserRole
-    from app.modules.auth.otp_service import verify_otp
-    from app.core.security import create_access_token
-
     if not verify_otp(body.phone, body.otp):
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
 
@@ -48,7 +32,7 @@ def verify_otp_login(
     if not user:
         user = User(
             phone=body.phone,
-            role=UserRole.student  # default role
+            role=UserRole.STUDENT  # default role
         )
         db.add(user)
         db.commit()
@@ -56,7 +40,8 @@ def verify_otp_login(
 
     token = create_access_token(
         data={
-            "sub": user.phone,
+            "sub": str(user.id),
+            "phone": user.phone,
             "role": user.role.value
         },
         expires_delta=60

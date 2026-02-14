@@ -1,13 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from datetime import datetime
+from typing import Any, List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from typing import List, Optional
-import asyncio
 
 from app.core.deps import get_db
-from app.modules.group_cart.service import GroupCartService
-from app.modules.group_cart.model import Group, GroupMember, GroupCartItem, GroupSlotLock, GroupPaymentSplit, PaymentSplitType
 from app.core.security import get_current_user
+from app.modules.group_cart.model import (
+    Group,
+    GroupCartItem,
+    GroupMember,
+    PaymentSplitType,
+)
+from app.modules.group_cart.service import GroupCartService
 from app.modules.users.model import User
 
 router = APIRouter(prefix="/groups", tags=["Group Cart"])
@@ -43,10 +49,12 @@ class GroupResponse(BaseModel):
     name: str
     owner_id: int
     status: str
-    created_at: str
-    members: List[dict]
-    cart_items: List[dict]
-    slot_lock: Optional[dict]
+    created_at: datetime
+    members: List[Any]
+    cart_items: List[Any]
+    slot_lock: Optional[Any]
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class GroupMemberResponse(BaseModel):
@@ -68,7 +76,7 @@ class GroupCartItemResponse(BaseModel):
 
 
 # Routes
-@router.post("/", response_model=GroupResponse)
+@router.post("/")
 def create_group(
     request: CreateGroupRequest,
     current_user: User = Depends(get_current_user),
@@ -76,13 +84,26 @@ def create_group(
 ):
     """Create a new group cart"""
     service = GroupCartService(db)
-    group = service.create_group(request.name, current_user.id)
+    group = service.create_group(request.name, current_user["id"])
 
     # Return with populated relationships
-    return service.get_group(group.id, current_user.id)
+    return service.get_group(group.id, current_user["id"])
 
 
-@router.get("/{group_id}", response_model=GroupResponse)
+@router.get("/my-groups")
+def get_my_groups(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all groups where user is a member"""
+    groups = db.query(Group).join(GroupMember).filter(
+        GroupMember.user_id == current_user["id"]
+    ).all()
+
+    return groups
+
+
+@router.get("/{group_id}")
 def get_group(
     group_id: int,
     current_user: User = Depends(get_current_user),
@@ -90,7 +111,7 @@ def get_group(
 ):
     """Get group details"""
     service = GroupCartService(db)
-    return service.get_group(group_id, current_user.id)
+    return service.get_group(group_id, current_user["id"])
 
 
 @router.post("/{group_id}/invite")
@@ -102,7 +123,7 @@ def invite_member(
 ):
     """Invite a member to the group"""
     service = GroupCartService(db)
-    member = service.invite_member(group_id, current_user.id, request.phone)
+    member = service.invite_member(group_id, current_user["id"], request.phone)
     return {"message": "Member invited successfully", "member_id": member.id}
 
 
@@ -115,7 +136,7 @@ def add_cart_item(
 ):
     """Add item to group cart"""
     service = GroupCartService(db)
-    cart_item = service.add_cart_item(group_id, current_user.id, request.menu_item_id, request.quantity)
+    cart_item = service.add_cart_item(group_id, current_user["id"], request.menu_item_id, request.quantity)
     return {"message": "Item added to cart", "cart_item_id": cart_item.id}
 
 
@@ -128,7 +149,7 @@ def lock_slot(
 ):
     """Lock a slot for the group"""
     service = GroupCartService(db)
-    lock = service.lock_slot(group_id, current_user.id, request.slot_id, request.duration_minutes)
+    lock = service.lock_slot(group_id, current_user["id"], request.slot_id, request.duration_minutes)
     return {"message": "Slot locked successfully", "lock_id": lock.id}
 
 
@@ -141,7 +162,7 @@ def place_group_order(
 ):
     """Place order for the entire group"""
     service = GroupCartService(db)
-    result = service.place_group_order(group_id, current_user.id)
+    result = service.place_group_order(group_id, current_user["id"])
 
     # In a real implementation, you might want to process orders asynchronously
     # background_tasks.add_task(process_group_order_async, result)
@@ -157,7 +178,7 @@ def get_payment_splits(
 ):
     """Get payment split configuration"""
     service = GroupCartService(db)
-    splits = service.get_payment_splits(group_id, current_user.id)
+    splits = service.get_payment_splits(group_id, current_user["id"])
     return splits
 
 
@@ -171,7 +192,7 @@ def set_payment_split(
     """Set payment split for current user"""
     service = GroupCartService(db)
     split = service.set_payment_split(
-        group_id, current_user.id, request.split_type, request.amount, request.percentage
+        group_id, current_user["id"], request.split_type, request.amount, request.percentage
     )
     return {"message": "Payment split updated", "split_id": split.id}
 
@@ -195,7 +216,7 @@ def remove_cart_item(
     if not item:
         raise HTTPException(status_code=404, detail="Cart item not found")
 
-    if item.owner_id != current_user.id:
+    if item.owner_id != current_user["id"]:
         raise HTTPException(status_code=403, detail="Can only remove your own items")
 
     db.delete(item)
@@ -204,14 +225,3 @@ def remove_cart_item(
     return {"message": "Item removed from cart"}
 
 
-@router.get("/my-groups")
-def get_my_groups(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all groups where user is a member"""
-    groups = db.query(Group).join(GroupMember).filter(
-        GroupMember.user_id == current_user.id
-    ).all()
-
-    return groups

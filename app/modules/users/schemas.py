@@ -1,6 +1,7 @@
-from pydantic import BaseModel
 from enum import Enum
 from typing import Optional
+
+from pydantic import BaseModel, ConfigDict
 
 
 class UserRole(str, Enum):
@@ -25,5 +26,4 @@ class UserResponse(BaseModel):
     role: UserRole
     university_id: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

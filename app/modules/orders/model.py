@@ -1,7 +1,9 @@
-from sqlalchemy import Column, Integer, ForeignKey, DateTime, Enum, Float, String
-from app.database.base import Base
-from datetime import datetime
 import enum
+
+from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer, String
+
+from app.core.time_utils import utcnow_naive
+from app.database.base import Base
 
 
 class OrderStatus(enum.Enum):
@@ -22,7 +24,8 @@ class Order(Base):
     vendor_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
     status = Column(Enum(OrderStatus), default=OrderStatus.PENDING)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    total_amount = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     # QR Pickup fields
     qr_code = Column(String(255), unique=True, nullable=True)

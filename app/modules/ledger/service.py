@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
-from app.modules.ledger.model import Ledger, LedgerType, LedgerSource
+
+from app.modules.ledger.model import Ledger, LedgerSource, LedgerType
 
 
 def add_ledger_entry(

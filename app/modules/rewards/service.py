@@ -1,14 +1,27 @@
-from sqlalchemy.orm import Session
+from datetime import datetime
+
 from sqlalchemy import and_
+from sqlalchemy.orm import Session
+
+from app.core.time_utils import utcnow_naive
+from app.modules.ledger.model import LedgerSource, LedgerType
+from app.modules.ledger.service import add_ledger_entry
+from app.modules.orders.model import Order, OrderStatus
 from app.modules.rewards.model import (
-    RewardPoints, RewardTransaction, RewardRedemption, RewardRule, RedemptionRule,
-    RewardType, RedemptionType
+    RedemptionRule,
+    RedemptionType,
+    OffPeakRewardPolicy,
+    OffPeakRewardPolicyAudit,
+    Voucher,
+    VoucherDiscountType,
+    VoucherRedemption,
+    RewardPoints,
+    RewardRedemption,
+    RewardRule,
+    RewardTransaction,
+    RewardType,
 )
 from app.modules.users.model import User
-from app.modules.orders.model import Order, OrderStatus
-from app.modules.ledger.service import add_ledger_entry
-from app.modules.ledger.model import LedgerType, LedgerSource
-from datetime import datetime
 
 
 def get_or_create_reward_points(user_id: int, db: Session) -> RewardPoints:
@@ -159,7 +172,7 @@ def get_available_redemptions(user_points: float, db: Session):
 def process_order_completion_rewards(order_id: int, db: Session):
     """Process rewards for completed order"""
     order = db.query(Order).filter(Order.id == order_id).first()
-    if not order or order.status != OrderStatus.CONFIRMED:
+    if not order or order.status != OrderStatus.COMPLETED:
         return
 
     # Get reward rules
@@ -183,8 +196,277 @@ def process_order_completion_rewards(order_id: int, db: Session):
         db
     )
 
+    policy = get_offpeak_policy(db)
+    order_hour = order.created_at.hour if order.created_at else None
+    if policy["enabled"] and order_hour is not None and policy["start_hour"] <= order_hour < policy["end_hour"]:
+        bonus_points = float(policy["bonus_points_per_order"])
+        if bonus_points > 0:
+            award_points(
+                order.user_id,
+                RewardType.OFF_PEAK_BONUS,
+                bonus_points,
+                f"Off-peak bonus for order #{order.id}",
+                order.id,
+                db,
+            )
 
-def initialize_default_rules(db: Session):
+
+def create_voucher(
+    code: str,
+    description: str,
+    discount_type: VoucherDiscountType,
+    discount_value: float,
+    min_order_amount_paise: int,
+    max_discount_amount_paise: int | None,
+    usage_limit: int | None,
+    expires_at: datetime,
+    created_by_user_id: int,
+    db: Session,
+) -> Voucher:
+    normalized_code = code.strip().upper()
+    if not normalized_code:
+        raise ValueError("Voucher code is required")
+    if discount_value <= 0:
+        raise ValueError("Discount value must be greater than 0")
+    if usage_limit is not None and usage_limit < 1:
+        raise ValueError("Usage limit must be at least 1")
+    if expires_at <= utcnow_naive():
+        raise ValueError("Voucher expiry must be in the future")
+
+    existing = db.query(Voucher).filter(Voucher.code == normalized_code).first()
+    if existing:
+        raise ValueError("Voucher code already exists")
+
+    voucher = Voucher(
+        code=normalized_code,
+        description=description,
+        discount_type=discount_type,
+        discount_value=discount_value,
+        min_order_amount_paise=min_order_amount_paise,
+        max_discount_amount_paise=max_discount_amount_paise,
+        usage_limit=usage_limit,
+        expires_at=expires_at,
+        created_by_user_id=created_by_user_id,
+        is_active=1,
+    )
+    db.add(voucher)
+    db.commit()
+    db.refresh(voucher)
+    return voucher
+
+
+def list_vouchers(db: Session, include_inactive: bool = False) -> list[Voucher]:
+    query = db.query(Voucher)
+    if not include_inactive:
+        query = query.filter(Voucher.is_active == 1, Voucher.expires_at > utcnow_naive())
+    return query.order_by(Voucher.created_at.desc()).all()
+
+
+def update_voucher(
+    voucher_id: int,
+    db: Session,
+    description: str | None = None,
+    discount_value: float | None = None,
+    min_order_amount_paise: int | None = None,
+    max_discount_amount_paise: int | None = None,
+    usage_limit: int | None = None,
+    expires_at: datetime | None = None,
+    is_active: bool | None = None,
+) -> Voucher:
+    voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
+    if not voucher:
+        raise ValueError("Voucher not found")
+
+    if description is not None:
+        voucher.description = description
+    if discount_value is not None:
+        if discount_value <= 0:
+            raise ValueError("Discount value must be greater than 0")
+        voucher.discount_value = discount_value
+    if min_order_amount_paise is not None:
+        voucher.min_order_amount_paise = min_order_amount_paise
+    if max_discount_amount_paise is not None:
+        voucher.max_discount_amount_paise = max_discount_amount_paise
+    if usage_limit is not None:
+        if usage_limit < 1:
+            raise ValueError("Usage limit must be at least 1")
+        voucher.usage_limit = usage_limit
+    if expires_at is not None:
+        if expires_at <= utcnow_naive():
+            raise ValueError("Voucher expiry must be in the future")
+        voucher.expires_at = expires_at
+    if is_active is not None:
+        voucher.is_active = 1 if is_active else 0
+
+    db.commit()
+    db.refresh(voucher)
+    return voucher
+
+
+def deactivate_voucher(voucher_id: int, db: Session) -> Voucher:
+    voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
+    if not voucher:
+        raise ValueError("Voucher not found")
+    voucher.is_active = 0
+    db.commit()
+    db.refresh(voucher)
+    return voucher
+
+
+def redeem_voucher(code: str, user_id: int, order_id: int, db: Session) -> dict:
+    voucher = db.query(Voucher).filter(Voucher.code == code.strip().upper()).first()
+    if not voucher:
+        raise ValueError("Voucher not found")
+    if voucher.is_active != 1:
+        raise ValueError("Voucher is inactive")
+    if voucher.expires_at <= utcnow_naive():
+        raise ValueError("Voucher has expired")
+    if voucher.usage_limit is not None and voucher.times_redeemed >= voucher.usage_limit:
+        raise ValueError("Voucher usage limit reached")
+
+    order = db.query(Order).filter(Order.id == order_id, Order.user_id == user_id).first()
+    if not order:
+        raise ValueError("Order not found")
+
+    existing_redemption = db.query(VoucherRedemption).filter(
+        VoucherRedemption.voucher_id == voucher.id,
+        VoucherRedemption.order_id == order.id,
+        VoucherRedemption.user_id == user_id,
+    ).first()
+    if existing_redemption:
+        raise ValueError("Voucher already redeemed for this order")
+
+    if int(order.total_amount or 0) < int(voucher.min_order_amount_paise or 0):
+        raise ValueError("Order does not meet minimum amount for voucher")
+
+    if voucher.discount_type == VoucherDiscountType.FIXED:
+        discount_amount = int(voucher.discount_value)
+    else:
+        discount_amount = int((order.total_amount * voucher.discount_value) / 100)
+        if voucher.max_discount_amount_paise is not None:
+            discount_amount = min(discount_amount, int(voucher.max_discount_amount_paise))
+
+    discount_amount = min(discount_amount, int(order.total_amount or 0))
+    if discount_amount <= 0:
+        raise ValueError("Voucher discount resolves to zero")
+
+    order.total_amount = int(order.total_amount or 0) - discount_amount
+
+    redemption = VoucherRedemption(
+        voucher_id=voucher.id,
+        user_id=user_id,
+        order_id=order.id,
+        discount_amount_paise=discount_amount,
+    )
+    db.add(redemption)
+
+    reward_redemption = RewardRedemption(
+        user_id=user_id,
+        redemption_type=RedemptionType.DISCOUNT_FIXED,
+        points_used=0,
+        value=discount_amount / 100,
+        description=f"Voucher {voucher.code} redeemed",
+        order_id=order.id,
+    )
+    db.add(reward_redemption)
+
+    reward_transaction = RewardTransaction(
+        user_id=user_id,
+        reward_type=RewardType.VOUCHER_REDEMPTION,
+        points=0,
+        description=f"Voucher {voucher.code} redeemed for ₹{discount_amount / 100:.2f}",
+        order_id=order.id,
+    )
+    db.add(reward_transaction)
+
+    add_ledger_entry(
+        order_id=order.id,
+        amount=discount_amount,
+        entry_type=LedgerType.DEBIT,
+        source=LedgerSource.VOUCHER,
+        db=db,
+        description=f"Voucher discount applied ({voucher.code})",
+    )
+
+    voucher.times_redeemed += 1
+    db.commit()
+    db.refresh(voucher)
+    return {
+        "voucher_id": voucher.id,
+        "code": voucher.code,
+        "discount_amount_paise": discount_amount,
+        "updated_order_total_paise": order.total_amount,
+    }
+
+
+def get_offpeak_policy(db: Session) -> dict:
+    policy = db.query(OffPeakRewardPolicy).order_by(OffPeakRewardPolicy.id.desc()).first()
+    if not policy:
+        return {
+            "enabled": False,
+            "start_hour": 15,
+            "end_hour": 17,
+            "bonus_points_per_order": 10.0,
+        }
+    return {
+        "enabled": bool(policy.enabled),
+        "start_hour": policy.start_hour,
+        "end_hour": policy.end_hour,
+        "bonus_points_per_order": float(policy.bonus_points_per_order),
+    }
+
+
+def set_offpeak_policy(
+    db: Session,
+    enabled: bool,
+    start_hour: int,
+    end_hour: int,
+    bonus_points_per_order: float,
+    actor_user_id: int,
+) -> dict:
+    if start_hour < 0 or start_hour > 23 or end_hour < 1 or end_hour > 24:
+        raise ValueError("Hours must be within 0-24")
+    if end_hour <= start_hour:
+        raise ValueError("end_hour must be greater than start_hour")
+    if bonus_points_per_order < 0:
+        raise ValueError("bonus_points_per_order must be non-negative")
+
+    policy = db.query(OffPeakRewardPolicy).order_by(OffPeakRewardPolicy.id.desc()).first()
+    if not policy:
+        policy = OffPeakRewardPolicy(
+            enabled=1 if enabled else 0,
+            start_hour=start_hour,
+            end_hour=end_hour,
+            bonus_points_per_order=bonus_points_per_order,
+            updated_by_user_id=actor_user_id,
+        )
+        db.add(policy)
+    else:
+        policy.enabled = 1 if enabled else 0
+        policy.start_hour = start_hour
+        policy.end_hour = end_hour
+        policy.bonus_points_per_order = bonus_points_per_order
+        policy.updated_by_user_id = actor_user_id
+
+    db.add(
+        OffPeakRewardPolicyAudit(
+            enabled=1 if enabled else 0,
+            start_hour=start_hour,
+            end_hour=end_hour,
+            bonus_points_per_order=bonus_points_per_order,
+            updated_by_user_id=actor_user_id,
+        )
+    )
+
+    db.commit()
+    return get_offpeak_policy(db)
+
+
+def list_offpeak_policy_audit(db: Session, limit: int = 20) -> list[OffPeakRewardPolicyAudit]:
+    return db.query(OffPeakRewardPolicyAudit).order_by(OffPeakRewardPolicyAudit.changed_at.desc()).limit(limit).all()
+
+
+def initialize_default_rules(db: Session, actor_user_id: int | None = None):
     """Initialize default reward and redemption rules"""
 
     # Reward rules
@@ -224,3 +506,15 @@ def initialize_default_rules(db: Session):
             db.add(rule)
 
     db.commit()
+
+    if actor_user_id is not None:
+        policy = db.query(OffPeakRewardPolicy).order_by(OffPeakRewardPolicy.id.desc()).first()
+        if not policy:
+            set_offpeak_policy(
+                db=db,
+                enabled=False,
+                start_hour=15,
+                end_hour=17,
+                bonus_points_per_order=10.0,
+                actor_user_id=actor_user_id,
+            )

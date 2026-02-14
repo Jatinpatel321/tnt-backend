@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Form
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
+
 from app.core.deps import get_db
-from app.core.security import get_current_user, require_role
-from app.modules.users.model import User
-from app.modules.menu.model import MenuItem
 from app.core.file_upload import save_menu_image
+from app.core.security import get_current_user, require_role
+from app.modules.menu.model import MenuItem
+from app.modules.users.model import User, UserRole
 
 router = APIRouter(prefix="/menu", tags=["Menu"])
 
@@ -16,11 +17,12 @@ def add_menu_item(
     description: str | None = Form(None),
     image: UploadFile = File(...),
     db: Session = Depends(get_db),
-    user=Depends(get_current_user)
+    user=Depends(require_role("vendor"))
 ):
-    require_role(user, "vendor")
-
     db_user = db.query(User).filter(User.phone == user["phone"]).first()
+    if (db_user.vendor_type or "food").lower() != "food":
+        raise HTTPException(status_code=403, detail="Only food vendors can manage menu items")
+
     if not db_user.is_approved:
         raise HTTPException(status_code=403, detail="Vendor not approved")
 
@@ -71,16 +73,17 @@ def update_menu_item(
     is_available: bool = Form(None),
     image: UploadFile = File(None),
     db: Session = Depends(get_db),
-    user=Depends(get_current_user)
+    user=Depends(require_role("vendor"))
 ):
-    require_role(user, "vendor")
-
     item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Menu item not found")
 
     # Ownership check
     db_user = db.query(User).filter(User.phone == user["phone"]).first()
+    if (db_user.vendor_type or "food").lower() != "food":
+        raise HTTPException(status_code=403, detail="Only food vendors can manage menu items")
+
     if item.vendor_id != db_user.id:
         raise HTTPException(status_code=403, detail="Cannot edit other vendor's menu")
 

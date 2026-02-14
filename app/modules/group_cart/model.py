@@ -1,8 +1,24 @@
-from sqlalchemy import Column, Integer, ForeignKey, String, DateTime, Enum, Float, Boolean, Text
-from sqlalchemy.orm import relationship
-from app.database.base import Base
-from datetime import datetime
 import enum
+from datetime import UTC, datetime
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy.orm import relationship
+
+from app.database.base import Base
+
+
+def utcnow_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class GroupStatus(enum.Enum):
@@ -30,8 +46,8 @@ class Group(Base):
     name = Column(String(100), nullable=False)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     status = Column(Enum(GroupStatus), default=GroupStatus.ACTIVE)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
+    updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
     # Relationships
     owner = relationship("User", back_populates="owned_groups")
@@ -47,7 +63,7 @@ class GroupMember(Base):
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     role = Column(Enum(GroupMemberRole), default=GroupMemberRole.MEMBER)
-    joined_at = Column(DateTime, default=datetime.utcnow)
+    joined_at = Column(DateTime, default=utcnow_naive)
 
     # Relationships
     group = relationship("Group", back_populates="members")
@@ -63,7 +79,7 @@ class GroupCartItem(Base):
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # Who added this item
     quantity = Column(Integer, nullable=False)
     price_at_time = Column(Float, nullable=False)
-    added_at = Column(DateTime, default=datetime.utcnow)
+    added_at = Column(DateTime, default=utcnow_naive)
 
     # Relationships
     group = relationship("Group", back_populates="cart_items")
@@ -78,7 +94,7 @@ class GroupSlotLock(Base):
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
     slot_id = Column(Integer, ForeignKey("slots.id"), nullable=False)
     locked_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    locked_at = Column(DateTime, default=datetime.utcnow)
+    locked_at = Column(DateTime, default=utcnow_naive)
     expires_at = Column(DateTime, nullable=False)  # Lock expires after some time
 
     # Relationships
@@ -96,7 +112,7 @@ class GroupPaymentSplit(Base):
     split_type = Column(Enum(PaymentSplitType), default=PaymentSplitType.EQUAL)
     amount = Column(Float, nullable=True)  # For custom splits
     percentage = Column(Float, nullable=True)  # For percentage-based splits
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     # Relationships
     group = relationship("Group")

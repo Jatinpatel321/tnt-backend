@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+
 from app.core.deps import get_db
 from app.core.security import get_current_user
 from app.modules.notifications.model import Notification

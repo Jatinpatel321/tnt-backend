@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
-from datetime import datetime
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+
+from app.core.time_utils import utcnow_naive
 from app.database.base import Base
 
 
@@ -14,4 +15,4 @@ class Notification(Base):
     message = Column(String, nullable=False)
 
     is_read = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)

@@ -1,184 +1,142 @@
-import requests
-import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
-BASE_URL = "http://localhost:8000"
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-def login(phone):
-    # Send OTP
-    response = requests.post(f"{BASE_URL}/auth/send-otp", json={"phone": phone})
-    if response.status_code != 200:
-        print(f"Send OTP failed for {phone}: {response.text}")
-        return None
+from app.core.deps import get_db
+from app.core.security import get_current_user
+from app.database.base import Base
+from app.main import app
+from app.modules.menu.model import MenuItem
+from app.modules.orders.model import Order
+from app.modules.slots.model import Slot, SlotStatus
+from app.modules.users.model import User, UserRole
 
-    # For testing, assume OTP is 123456 (check otp_service.py)
-    otp = "123456"
-    response = requests.post(f"{BASE_URL}/auth/verify-otp", json={"phone": phone, "otp": otp})
-    if response.status_code == 200:
-        return response.json()["access_token"]
-    else:
-        print(f"Verify OTP failed for {phone}: {response.text}")
-        return None
 
-def create_slot(token, start_time, end_time, max_orders):
-    headers = {"Authorization": f"Bearer {token}"}
-    data = {
-        "start_time": start_time.isoformat(),
-        "end_time": end_time.isoformat(),
-        "max_orders": max_orders
-    }
-    response = requests.post(f"{BASE_URL}/slots/", json=data, headers=headers)
-    if response.status_code == 200:
-        return response.json()["id"]
-    else:
-        print(f"Create slot failed: {response.text}")
-        return None
+def utcnow_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
-def place_order(token, slot_id):
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.post(f"{BASE_URL}/orders/{slot_id}", headers=headers)
-    if response.status_code == 200:
-        return response.json()["id"]
-    else:
-        print(f"Place order failed: {response.text}")
-        return None
 
-def get_my_orders(token):
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.get(f"{BASE_URL}/orders/my", headers=headers)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Get orders failed: {response.text}")
-        return []
+@pytest.fixture()
+def test_db_session():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
 
-def cancel_order(token, order_id):
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.post(f"{BASE_URL}/orders/{order_id}/cancel", headers=headers)
-    print(f"Cancel order {order_id}: {response.status_code} - {response.text}")
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=engine)
 
-def confirm_order(token, order_id):
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.post(f"{BASE_URL}/orders/{order_id}/confirm", headers=headers)
-    print(f"Confirm order {order_id}: {response.status_code} - {response.text}")
 
-def complete_order(token, order_id):
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.post(f"{BASE_URL}/orders/{order_id}/complete", headers=headers)
-    print(f"Complete order {order_id}: {response.status_code} - {response.text}")
+@pytest.fixture()
+def seed_data(test_db_session):
+    student = User(phone="7000000001", name="Student", role=UserRole.STUDENT, is_active=True)
+    vendor = User(
+        phone="7000000010",
+        name="Vendor",
+        role=UserRole.VENDOR,
+        is_active=True,
+        is_approved=True,
+    )
+    test_db_session.add_all([student, vendor])
+    test_db_session.commit()
+    test_db_session.refresh(student)
+    test_db_session.refresh(vendor)
 
-def initiate_payment(token, order_id):
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.post(f"{BASE_URL}/payments/initiate/{order_id}", headers=headers)
-    if response.status_code == 200:
-        return response.json()["id"]
-    else:
-        print(f"Initiate payment failed: {response.text}")
-        return None
+    slot = Slot(
+        vendor_id=vendor.id,
+        start_time=utcnow_naive() + timedelta(hours=1),
+        end_time=utcnow_naive() + timedelta(hours=2),
+        max_orders=10,
+        current_orders=0,
+        status=SlotStatus.AVAILABLE,
+    )
+    menu_item = MenuItem(
+        vendor_id=vendor.id,
+        name="Combo Meal",
+        description="Test item",
+        price=120,
+        image_url="https://example.com/item.png",
+        is_available=True,
+    )
+    test_db_session.add_all([slot, menu_item])
+    test_db_session.commit()
+    test_db_session.refresh(slot)
+    test_db_session.refresh(menu_item)
 
-def complete_payment(token, payment_id, success):
-    headers = {"Authorization": f"Bearer {token}"}
-    data = {"success": success}
-    response = requests.post(f"{BASE_URL}/payments/complete/{payment_id}", json=data, headers=headers)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Complete payment failed: {response.text}")
-        return None
+    return {"student": student, "vendor": vendor, "slot": slot, "menu_item": menu_item}
 
-def test_flow():
-    # Login
-    student_token = login("1111111111")
-    vendor_token = login("2222222222")
-    if not student_token or not vendor_token:
-        return
 
-    # Create slot
-    start_time = datetime.utcnow() + timedelta(hours=1)
-    end_time = start_time + timedelta(hours=2)
-    slot_id = create_slot(vendor_token, start_time, end_time, 10)
-    if not slot_id:
-        return
+@pytest.fixture()
+def auth_context(seed_data):
+    student = seed_data["student"]
+    return {"id": student.id, "phone": student.phone, "role": student.role.value}
 
-    print("=== Student places order ===")
-    order_id = place_order(student_token, slot_id)
-    if not order_id:
-        return
 
-    orders = get_my_orders(student_token)
-    print(f"Order status: {orders[0]['status'] if orders else 'None'}")
+@pytest.fixture()
+def client(test_db_session, auth_context):
+    def override_get_db():
+        try:
+            yield test_db_session
+        finally:
+            pass
 
-    print("=== Student cancels order ===")
-    cancel_order(student_token, order_id)
+    def override_get_current_user():
+        return auth_context
 
-    print("=== Student places another order ===")
-    order_id2 = place_order(student_token, slot_id)
-    if not order_id2:
-        return
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_get_current_user
 
-    print("=== Vendor confirms order ===")
-    confirm_order(vendor_token, order_id2)
+    with TestClient(app) as test_client:
+        yield test_client
 
-    print("=== Vendor completes order ===")
-    complete_order(vendor_token, order_id2)
+    app.dependency_overrides.clear()
 
-    print("=== Invalid: Student tries to confirm ===")
-    confirm_order(student_token, order_id2)  # Should 403
 
-    print("=== Invalid: Vendor tries to complete before confirm ===")
-    order_id3 = place_order(student_token, slot_id)
-    if order_id3:
-        complete_order(vendor_token, order_id3)  # Should 400
+def test_order_lifecycle_flow(client, test_db_session, seed_data, auth_context):
+    slot = seed_data["slot"]
+    menu_item = seed_data["menu_item"]
+    vendor = seed_data["vendor"]
+    student = seed_data["student"]
 
-    print("=== Invalid: Cancel after confirm ===")
-    order_id4 = place_order(student_token, slot_id)
-    if order_id4:
-        confirm_order(vendor_token, order_id4)
-        cancel_order(student_token, order_id4)  # Should 400
+    place_resp = client.post(
+        f"/orders/{slot.id}",
+        json=[{"menu_item_id": menu_item.id, "quantity": 2}],
+    )
+    assert place_resp.status_code == 200
+    place_body = place_resp.json()
+    order_id = place_body["order_id"]
+    assert place_body["pickup_load_label"] == "LOW"
+    assert place_body["express_pickup_eligible"] is True
 
-    print("=== Payment Flow Test ===")
-    # Place order for payment test
-    order_id5 = place_order(student_token, slot_id)
-    if not order_id5:
-        return
+    my_orders_resp = client.get("/orders/my")
+    assert my_orders_resp.status_code == 200
+    assert any(order["id"] == order_id for order in my_orders_resp.json())
 
-    orders = get_my_orders(student_token)
-    print(f"Order {order_id5} status before payment: {orders[0]['status'] if orders else 'None'}")
+    auth_context.update({"id": vendor.id, "phone": vendor.phone, "role": vendor.role.value})
 
-    # Initiate payment
-    payment_id = initiate_payment(student_token, order_id5)
-    if not payment_id:
-        return
-    print(f"Payment initiated: {payment_id}")
+    confirm_resp = client.post(f"/orders/{order_id}/confirm")
+    assert confirm_resp.status_code == 200
 
-    # Complete payment with success
-    payment_result = complete_payment(student_token, payment_id, True)
-    if payment_result:
-        print(f"Payment completed successfully: {payment_result}")
+    complete_resp = client.post(f"/orders/{order_id}/complete")
+    assert complete_resp.status_code == 200
 
-    # Check order status
-    orders = get_my_orders(student_token)
-    print(f"Order {order_id5} status after successful payment: {orders[0]['status'] if orders else 'None'}")
+    auth_context.update({"id": student.id, "phone": student.phone, "role": student.role.value})
 
-    # Place another order for failure test
-    order_id6 = place_order(student_token, slot_id)
-    if not order_id6:
-        return
+    cancel_after_complete = client.post(f"/orders/{order_id}/cancel")
+    assert cancel_after_complete.status_code == 400
 
-    # Initiate payment
-    payment_id2 = initiate_payment(student_token, order_id6)
-    if not payment_id2:
-        return
-    print(f"Payment initiated for failure test: {payment_id2}")
-
-    # Complete payment with failure
-    payment_result2 = complete_payment(student_token, payment_id2, False)
-    if payment_result2:
-        print(f"Payment failed: {payment_result2}")
-
-    # Check order status
-    orders = get_my_orders(student_token)
-    print(f"Order {order_id6} status after failed payment: {orders[0]['status'] if orders else 'None'}")
-
-if __name__ == "__main__":
-    test_flow()
+    order_record = test_db_session.query(Order).filter(Order.id == order_id).first()
+    assert order_record is not None
+    assert order_record.total_amount == place_body["total_amount"]
+    assert order_record.status.value == "completed"

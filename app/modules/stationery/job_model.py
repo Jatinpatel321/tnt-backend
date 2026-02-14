@@ -1,7 +1,9 @@
-from sqlalchemy import Column, Integer, ForeignKey, String, Enum, DateTime
-from app.database.base import Base
-from datetime import datetime
 import enum
+
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String
+
+from app.core.time_utils import utcnow_naive
+from app.database.base import Base
 
 
 class JobStatus(enum.Enum):
@@ -22,6 +24,11 @@ class StationeryJob(Base):
 
     quantity = Column(Integer, nullable=False)
     file_url = Column(String, nullable=True)
+    amount = Column(Integer, nullable=False, default=0)
+    is_paid = Column(Boolean, nullable=False, default=False)
+    razorpay_order_id = Column(String, nullable=True)
+    razorpay_payment_id = Column(String, nullable=True)
+    razorpay_signature = Column(String, nullable=True)
 
     status = Column(Enum(JobStatus), default=JobStatus.SUBMITTED)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)

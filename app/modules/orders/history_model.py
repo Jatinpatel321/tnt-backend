@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, ForeignKey, DateTime, Enum
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer
+
+from app.core.time_utils import utcnow_naive
 from app.database.base import Base
-from datetime import datetime
 from app.modules.orders.model import OrderStatus
 
 
@@ -11,4 +12,4 @@ class OrderHistory(Base):
 
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
     status = Column(Enum(OrderStatus), nullable=False)
-    changed_at = Column(DateTime, default=datetime.utcnow)
+    changed_at = Column(DateTime, default=utcnow_naive)

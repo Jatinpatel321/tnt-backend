@@ -1,8 +1,11 @@
 import uuid
 from datetime import datetime
+
 from sqlalchemy.orm import Session
-from app.modules.orders.model import Order, OrderStatus
+
 from app.core.security import get_current_user_id
+from app.core.time_utils import utcnow_naive
+from app.modules.orders.model import Order, OrderStatus
 
 
 def generate_qr_code(order_id: int, db: Session) -> str:
@@ -36,7 +39,7 @@ def confirm_pickup(qr_code: str, vendor_id: int, db: Session) -> bool:
         return False
 
     order.status = OrderStatus.COMPLETED
-    order.pickup_confirmed_at = datetime.utcnow()
+    order.pickup_confirmed_at = utcnow_naive()
     order.pickup_confirmed_by = vendor_id
     db.commit()
     return True

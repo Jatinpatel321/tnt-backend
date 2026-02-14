@@ -1,8 +1,10 @@
 import sys
+
 sys.path.insert(0, '.')
 
 from app.database.session import SessionLocal
 from app.modules.users.model import User, UserRole
+
 
 def add_test_users():
     db = SessionLocal()

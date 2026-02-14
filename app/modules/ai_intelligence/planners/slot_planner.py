@@ -1,9 +1,12 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
-from app.modules.slots.model import Slot
+from typing import Any, Dict, List
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.time_utils import utcnow_naive
 from app.modules.orders.model import Order
+from app.modules.slots.model import Slot
 
 
 class SlotPlanner:
@@ -16,7 +19,7 @@ class SlotPlanner:
         """Calculate AI capacity recommendation for vendor"""
 
         # Get last 7 days average orders per slot
-        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        seven_days_ago = utcnow_naive() - timedelta(days=7)
 
         avg_orders_per_slot = self._calculate_avg_orders_per_slot(vendor_id, seven_days_ago)
 
@@ -99,7 +102,7 @@ class SlotPlanner:
         """Detect peak hours and suggest special slots"""
 
         signals = []
-        current_hour = datetime.utcnow().hour
+        current_hour = utcnow_naive().hour
 
         # Check if current hour is typically busy
         busy_hours = self._get_busy_hours(vendor_id)
@@ -158,7 +161,7 @@ class SlotPlanner:
     def _get_busy_hours(self, vendor_id: int) -> List[int]:
         """Get hours that are typically busy"""
 
-        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        seven_days_ago = utcnow_naive() - timedelta(days=7)
 
         busy_hours_query = self.db.query(
             func.extract('hour', Order.created_at).label('hour'),
@@ -174,7 +177,20 @@ class SlotPlanner:
 
     def _calculate_avg_completion_time(self, vendor_id: int) -> float:
         """Calculate average time from order to completion"""
+        completed_orders = self.db.query(Order).filter(
+            Order.vendor_id == vendor_id,
+            Order.status == "completed",
+            Order.pickup_confirmed_at.isnot(None),
+            Order.created_at.isnot(None),
+        ).all()
 
-        # This would require order history/timeline data
-        # For now, return a mock calculation
-        return 12.5  # minutes
+        completion_minutes: list[float] = []
+        for order in completed_orders:
+            delta_minutes = (order.pickup_confirmed_at - order.created_at).total_seconds() / 60
+            if delta_minutes > 0:
+                completion_minutes.append(delta_minutes)
+
+        if not completion_minutes:
+            return 15.0
+
+        return round(sum(completion_minutes) / len(completion_minutes), 1)
